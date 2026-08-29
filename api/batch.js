@@ -47,16 +47,30 @@ function parseAddresses(input) {
   const addresses = [];
   const seen = new Set();
 
-
   function add(value) {
 
-    const address = cleanAddress(value);
+    if (typeof value !== 'string') {
+      return;
+    }
 
-    if (!address) return;
+    // Remove surrounding whitespace and common JSON/CSV
+    // punctuation without altering the actual address.
+    const address = value
+      .trim()
+      .replace(/^["']+|["']+$/g, '')
+      .replace(/[,\]\}]+$/g, '')
+      .replace(/^[\[\{]+/g, '');
 
-    const normalized = address.toLowerCase();
+    if (!ADDRESS_RE.test(address)) {
+      return;
+    }
 
-    if (seen.has(normalized)) return;
+    const normalized =
+      address.toLowerCase();
+
+    if (seen.has(normalized)) {
+      return;
+    }
 
     seen.add(normalized);
 
@@ -64,91 +78,174 @@ function parseAddresses(input) {
   }
 
 
-  // Array of addresses.
-  if (Array.isArray(input)) {
+  // ==========================================================
+  // Recursive object/array parser
+  // ==========================================================
 
-    for (const item of input) {
+  function parseValue(value) {
 
-      if (typeof item === 'string') {
-        add(item);
-      }
-
-      if (
-        item &&
-        typeof item === 'object'
-      ) {
-        add(
-          item.address ||
-          item.contractAddress
-        );
-      }
+    if (typeof value === 'string') {
+      add(value);
+      return;
     }
 
-    return addresses;
+
+    if (Array.isArray(value)) {
+
+      for (const item of value) {
+        parseValue(item);
+      }
+
+      return;
+    }
+
+
+    if (
+      value &&
+      typeof value === 'object'
+    ) {
+
+      // Your format:
+      // { "address": "0x..." }
+
+      if (value.address) {
+        add(value.address);
+      }
+
+
+      // Also support:
+      // { "contractAddress": "0x..." }
+
+      if (value.contractAddress) {
+        add(value.contractAddress);
+      }
+
+
+      // Also support:
+      // { "addresses": [...] }
+
+      if (Array.isArray(value.addresses)) {
+
+        for (
+          const item of value.addresses
+        ) {
+          parseValue(item);
+        }
+      }
+    }
   }
 
 
-  // Object containing addresses.
+  // ==========================================================
+  // Already-parsed JavaScript object/array
+  // ==========================================================
+
   if (
     input &&
     typeof input === 'object'
   ) {
 
-    if (Array.isArray(input.addresses)) {
-      return parseAddresses(input.addresses);
-    }
-
-    if (input.address) {
-      add(input.address);
-    }
+    parseValue(input);
 
     return addresses;
   }
 
 
-  // Raw JSONL / pasted text.
-  if (typeof input === 'string') {
+  // ==========================================================
+  // String input
+  // ==========================================================
 
-    const lines = input.split(/\r?\n/);
-
-    for (const line of lines) {
-
-      const trimmed = line.trim();
-
-      if (!trimmed) continue;
+  if (typeof input !== 'string') {
+    return addresses;
+  }
 
 
-      // Try JSONL first.
-      if (
-        trimmed.startsWith('{') ||
-        trimmed.startsWith('[')
-      ) {
-
-        try {
-
-          const parsed = JSON.parse(trimmed);
-
-          const nested =
-            parseAddresses(parsed);
-
-          for (const address of nested) {
-            add(address);
-          }
-
-          continue;
-
-        } catch {
-          // Fall through to text parsing.
-        }
-      }
+  const text =
+    input.trim();
 
 
-      // Split CSV / whitespace.
-      const parts =
-        trimmed.split(/[\s,;]+/);
+  if (!text) {
+    return addresses;
+  }
 
-      for (const part of parts) {
-        add(part);
+
+  // ==========================================================
+  // IMPORTANT:
+  // First try the ENTIRE string as JSON.
+  //
+  // This fixes pretty-printed JSON arrays like:
+  //
+  // [
+  //   {"address":"0x..."},
+  //   {"address":"0x..."}
+  // ]
+  // ==========================================================
+
+  try {
+
+    const parsed =
+      JSON.parse(text);
+
+    parseValue(parsed);
+
+    if (addresses.length > 0) {
+      return addresses;
+    }
+
+  } catch {
+    // Not one complete JSON document.
+    // Continue and try JSONL / plain text.
+  }
+
+
+  // ==========================================================
+  // JSONL
+  // ==========================================================
+
+  const lines =
+    text.split(/\r?\n/);
+
+
+  for (const line of lines) {
+
+    const trimmed =
+      line.trim();
+
+
+    if (!trimmed) {
+      continue;
+    }
+
+
+    // Try each JSONL line as an object.
+    try {
+
+      const parsed =
+        JSON.parse(trimmed);
+
+      parseValue(parsed);
+
+      continue;
+
+    } catch {
+      // Not JSON on this line.
+    }
+
+
+    // ========================================================
+    // Plain address / CSV / whitespace fallback
+    // ========================================================
+
+    const matches =
+      trimmed.match(
+        /0x[a-fA-F0-9]{40}/g
+      );
+
+
+    if (matches) {
+
+      for (const address of matches) {
+        add(address);
       }
     }
   }
