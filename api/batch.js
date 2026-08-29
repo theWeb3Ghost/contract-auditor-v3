@@ -1,4 +1,4 @@
-```js
+
 // api/batch.js
 
 const crypto = require('crypto');
@@ -1487,4 +1487,3 @@ module.exports = {
   router,
   resumePendingBatches
 };
-```
