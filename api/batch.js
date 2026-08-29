@@ -591,147 +591,296 @@ function waitForLLMSlot() {
 // FETCH CONTRACT SOURCE
 // ============================================================
 
+
 async function fetchContractSource({
   address,
   chainId,
   etherscanKey
 }) {
 
-  const chain =
-    encodeURIComponent(
-      chainId || '1'
-    );
-
-
   const apiKey =
     etherscanKey ||
     process.env.ETHERSCAN_API_KEY;
 
-
   if (!apiKey) {
-
     throw new Error(
       'No Etherscan API key configured'
     );
   }
 
 
-  const url =
-    `https://api.etherscan.io/v2/api` +
-    `?chainid=${chain}` +
-    `&module=contract` +
-    `&action=getsourcecode` +
-    `&address=${encodeURIComponent(address)}` +
-    `&apikey=${encodeURIComponent(apiKey)}`;
+  // ============================================================
+  // HELPER: FETCH ONE ADDRESS FROM ETHERSCAN
+  // ============================================================
+
+  async function fetchOne(contractAddress) {
+
+    const chain =
+      encodeURIComponent(chainId || '1');
+
+    const url =
+      `https://api.etherscan.io/v2/api` +
+      `?chainid=${chain}` +
+      `&module=contract` +
+      `&action=getsourcecode` +
+      `&address=${encodeURIComponent(contractAddress)}` +
+      `&apikey=${encodeURIComponent(apiKey)}`;
+
+    const response = await fetch(url);
+
+    const raw = await response.text();
 
 
-  const response =
-    await fetch(
-      url
-    );
+    // ----------------------------------------------------------
+    // RATE LIMIT
+    // ----------------------------------------------------------
 
+    if (response.status === 429) {
 
-  const raw =
-    await response.text();
-
-
-  if (
-    response.status ===
-    429
-  ) {
-
-    const error =
-      new Error(
+      const error = new Error(
         'Explorer API rate limit reached'
       );
 
+      error.code = 'RATE_LIMIT';
+      error.httpStatus = 429;
 
-    error.code =
-      'RATE_LIMIT';
-
-    error.httpStatus =
-      429;
-
-    error.responseText =
-      raw;
+      throw error;
+    }
 
 
-    throw error;
-  }
+    // ----------------------------------------------------------
+    // HTTP ERROR
+    // ----------------------------------------------------------
 
+    if (!response.ok) {
 
-  if (
-    !response.ok
-  ) {
-
-    throw new Error(
-      `Explorer returned HTTP ${response.status}: ${raw.slice(0, 500)}`
-    );
-  }
-
-
-  let data;
-
-
-  try {
-
-    data =
-      JSON.parse(
-        raw
+      throw new Error(
+        `Explorer returned HTTP ${response.status}: ` +
+        raw.slice(0, 500)
       );
-
-  } catch {
-
-    throw new Error(
-      'Explorer returned invalid JSON'
-    );
-  }
+    }
 
 
-  const result =
-    Array.isArray(
-      data.result
-    )
-      ? data.result[0]
-      : null;
+    // ----------------------------------------------------------
+    // PARSE RESPONSE
+    // ----------------------------------------------------------
+
+    let data;
+
+    try {
+
+      data = JSON.parse(raw);
+
+    } catch {
+
+      throw new Error(
+        'Explorer returned invalid JSON'
+      );
+    }
 
 
-  if (
-    !result ||
-    !result.SourceCode
-  ) {
+    const result =
+      Array.isArray(data.result)
+        ? data.result[0]
+        : null;
+
+
+    // ----------------------------------------------------------
+    // NOT VERIFIED
+    // ----------------------------------------------------------
+
+    if (
+      !result ||
+      !result.SourceCode ||
+      !String(result.SourceCode).trim()
+    ) {
+
+      return {
+        verified: false,
+
+        reason:
+          data.message ||
+          'Contract source not verified'
+      };
+    }
+
 
     return {
-      verified: false,
+      verified: true,
 
-      reason:
-        data.message ||
-        'Contract source not verified'
+      address: contractAddress,
+
+      source:
+        result.SourceCode,
+
+      contractName:
+        result.ContractName ||
+        'Unknown',
+
+      compilerVersion:
+        result.CompilerVersion ||
+        null,
+
+      isProxy:
+        result.Proxy === '1',
+
+      implementation:
+        result.Implementation ||
+        null
     };
   }
 
 
-  return {
+  // ============================================================
+  // STEP 1: FETCH ORIGINAL ADDRESS
+  // ============================================================
 
+  const base =
+    await fetchOne(address);
+
+
+  // Normal unverified contract → skip
+  if (!base.verified) {
+
+    return base;
+  }
+
+
+  // ============================================================
+  // STEP 2: CHECK IF IT IS A PROXY
+  // ============================================================
+
+  const implementationAddress =
+    base.implementation;
+
+
+  const isValidImplementation =
+    base.isProxy &&
+    implementationAddress &&
+    /^0x[a-fA-F0-9]{40}$/.test(
+      implementationAddress
+    );
+
+
+  // ------------------------------------------------------------
+  // NORMAL CONTRACT
+  // ------------------------------------------------------------
+
+  if (!isValidImplementation) {
+
+    return {
+      verified: true,
+
+      address,
+
+      auditedAddress: address,
+
+      source:
+        base.source,
+
+      contractName:
+        base.contractName,
+
+      compilerVersion:
+        base.compilerVersion,
+
+      isProxy: false,
+
+      implementation: null
+    };
+  }
+
+
+  // ============================================================
+  // STEP 3: FETCH IMPLEMENTATION
+  // ============================================================
+
+  console.log(
+    `[PROXY DETECTED] ${address}`
+  );
+
+  console.log(
+    `[IMPLEMENTATION] ${implementationAddress}`
+  );
+
+
+  const implementation =
+    await fetchOne(
+      implementationAddress
+    );
+
+
+  // ============================================================
+  // STEP 4: IMPLEMENTATION NOT VERIFIED → SKIP
+  // ============================================================
+
+  if (!implementation.verified) {
+
+    console.log(
+      `[PROXY SKIPPED] Implementation not verified: ` +
+      `${implementationAddress}`
+    );
+
+    return {
+      verified: false,
+
+      isProxy: true,
+
+      proxyAddress: address,
+
+      implementation:
+        implementationAddress,
+
+      reason:
+        'Proxy implementation source is not verified'
+    };
+  }
+
+
+  // ============================================================
+  // STEP 5: IMPLEMENTATION VERIFIED
+  // SEND IMPLEMENTATION SOURCE TO LLM
+  // ============================================================
+
+  console.log(
+    `[PROXY RESOLVED] ${address}`
+  );
+
+  console.log(
+    `[AUDITING IMPLEMENTATION] ${implementationAddress}`
+  );
+
+
+  return {
     verified: true,
 
+    // Original address submitted by user
+    address,
+
+    // Actual address whose code is audited
+    auditedAddress:
+      implementationAddress,
+
+    // IMPORTANT:
+    // THIS IS IMPLEMENTATION SOURCE
     source:
-      result.SourceCode,
+      implementation.source,
 
     contractName:
-      result.ContractName ||
-      'Unknown',
+      implementation.contractName,
 
     compilerVersion:
-      result.CompilerVersion ||
-      null,
+      implementation.compilerVersion,
+
+    isProxy: true,
+
+    proxyAddress:
+      address,
 
     implementation:
-      result.Implementation ||
-      null
+      implementationAddress
   };
-}
-
+  }
 
 // ============================================================
 // PROCESS ONE ITEM
