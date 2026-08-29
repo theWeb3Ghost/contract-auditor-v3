@@ -1049,28 +1049,28 @@ async function processBatchItem(
 
 
     audit =
-      await runLLMAudit({
+  await runLLMAudit({
+    source: contract.source,
 
-        source:
-          contract.source,
+    systemPrompt:
+      batch.systemPrompt,
 
-        systemPrompt:
-          batch.systemPrompt,
+    model:
+      batch.model,
 
-        model:
-          batch.model,
+    contractName:
+      contract.contractName,
 
-        contractName:
-          contract.contractName,
+    // The actual contract whose source is being audited
+    address:
+      contract.auditedAddress || address,
 
-        address,
+    llmUrl:
+      batch.llmUrl,
 
-        llmUrl:
-          batch.llmUrl,
-
-        apiKey:
-          batch.openaiKey
-      });
+    apiKey:
+      batch.openaiKey
+  });
 
   } catch (error) {
 
