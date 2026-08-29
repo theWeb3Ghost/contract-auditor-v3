@@ -1,592 +1,1451 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
 <title>Contract Auditor</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+
 <style>
-  :root {
-    --bg: #14171c;
-    --panel: #1b1f26;
-    --border: #2a2f38;
-    --text: #dfe3e8;
-    --text-dim: #8b93a1;
-    --accent: #d8a12e;
-    --accent-dim: #a67f28;
-    --ok: #4caf7d;
-    --err: #e0645b;
-    --mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--text);
-    font-family: var(--sans);
-    line-height: 1.5;
-    padding: 20px 16px 60px;
-  }
-  .wrap { max-width: 720px; margin: 0 auto; }
-  header { margin-bottom: 24px; }
-  h1 {
-    font-size: 1.3rem;
-    font-weight: 700;
-    margin: 0 0 4px;
-    letter-spacing: -0.01em;
-  }
-  header p { color: var(--text-dim); margin: 0; font-size: 0.9rem; }
-  .panel {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 16px;
-    margin-bottom: 16px;
-  }
-  .panel h2 {
-    font-size: 0.75rem;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--text-dim);
-    margin: 0 0 12px;
-    font-weight: 600;
-  }
-  label {
-    display: block;
-    font-size: 0.85rem;
-    color: var(--text-dim);
-    margin-bottom: 6px;
-  }
-  select, input[type="text"], textarea {
-    width: 100%;
-    background: #101317;
-    border: 1px solid var(--border);
-    color: var(--text);
-    border-radius: 6px;
-    padding: 10px 12px;
-    font-family: var(--mono);
-    font-size: 0.85rem;
-    margin-bottom: 14px;
-  }
-  textarea { resize: vertical; min-height: 90px; }
-  #systemPrompt { min-height: 160px; }
-  .mode-toggle { display: flex; gap: 8px; margin-bottom: 14px; }
-  .mode-toggle button {
-    flex: 1;
-    padding: 8px;
-    border-radius: 6px;
-    border: 1px solid var(--border);
-    background: transparent;
-    color: var(--text-dim);
-    font-size: 0.85rem;
-    cursor: pointer;
-  }
-  .mode-toggle button.active {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #16130a;
-    font-weight: 600;
-  }
-  .file-row { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
-  .file-row input[type="file"] { font-size: 0.8rem; color: var(--text-dim); }
-  button.run {
-    width: 100%;
-    padding: 13px;
-    border-radius: 8px;
-    border: none;
-    background: var(--accent);
-    color: #16130a;
-    font-weight: 700;
-    font-size: 0.95rem;
-    cursor: pointer;
-  }
-  button.run:disabled { background: #4a4636; color: #8a8470; cursor: not-allowed; }
-  button.secondary {
-    width: 100%;
-    padding: 12px;
-    border-radius: 8px;
-    border: 1px solid var(--accent-dim);
-    background: transparent;
-    color: var(--accent);
-    font-weight: 600;
-    font-size: 0.9rem;
-    cursor: pointer;
-    margin-top: 10px;
-  }
-  .log {
-    font-family: var(--mono);
-    font-size: 0.78rem;
-    max-height: 340px;
-    overflow-y: auto;
-  }
-  .log-line {
-    padding: 8px 0;
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    gap: 8px;
-    align-items: baseline;
-  }
-  .log-line:last-child { border-bottom: none; }
-  .status { flex-shrink: 0; width: 78px; font-weight: 700; text-transform: uppercase; font-size: 0.68rem; }
-  .status.ok { color: var(--ok); }
-  .status.err { color: var(--err); }
-  .status.pending { color: var(--text-dim); }
-  .status.skip { color: var(--text-dim); }
-  .addr { color: var(--text-dim); word-break: break-all; }
-  .msg { color: var(--text); }
-  .hint { font-size: 0.78rem; color: var(--text-dim); margin-top: -6px; margin-bottom: 14px; }
+
+:root {
+  --bg: #14171c;
+  --panel: #1b1f26;
+  --border: #2a2f38;
+  --text: #dfe3e8;
+  --text-dim: #8b93a1;
+  --accent: #d8a12e;
+  --accent-dim: #a67f28;
+  --ok: #4caf7d;
+  --err: #e0645b;
+  --warn: #e0a85b;
+  --mono: monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  padding: 16px;
+}
+
+.wrap {
+  max-width: 800px;
+  margin: auto;
+}
+
+header {
+  margin-bottom: 20px;
+}
+
+h1 {
+  font-size: 1.5rem;
+  margin-bottom: 5px;
+}
+
+header p {
+  color: var(--text-dim);
+  margin: 0;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.panel h2 {
+  margin-top: 0;
+  font-size: 0.9rem;
+  color: var(--accent);
+}
+
+label {
+  display: block;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+  font-size: 0.85rem;
+}
+
+input,
+textarea,
+select {
+  width: 100%;
+  background: #101317;
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 10px;
+  border-radius: 7px;
+  margin-bottom: 14px;
+  font-family: var(--mono);
+}
+
+textarea {
+  min-height: 120px;
+}
+
+button {
+  border: none;
+  border-radius: 8px;
+  padding: 11px 14px;
+  cursor: pointer;
+  font-weight: bold;
+}
+
+.primary {
+  background: var(--accent);
+  color: #16130a;
+  width: 100%;
+}
+
+.secondary {
+  background: transparent;
+  border: 1px solid var(--accent-dim);
+  color: var(--accent);
+}
+
+.danger {
+  background: #4a2525;
+  color: #ffb0a8;
+}
+
+button:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+.mode-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.mode-row button {
+  flex: 1;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+
+.mode-row button.active {
+  background: var(--accent);
+  color: #16130a;
+}
+
+.progress-bar {
+  height: 12px;
+  background: #101317;
+  border-radius: 10px;
+  overflow: hidden;
+  margin: 12px 0;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--accent);
+  width: 0%;
+  transition: width .3s;
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+
+.stat {
+  background: #101317;
+  padding: 10px;
+  border-radius: 8px;
+}
+
+.stat-value {
+  font-size: 1.3rem;
+  font-weight: bold;
+}
+
+.stat-label {
+  color: var(--text-dim);
+  font-size: .75rem;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 5px 8px;
+  border-radius: 6px;
+  font-size: .75rem;
+  font-weight: bold;
+  text-transform: uppercase;
+}
+
+.status-running {
+  background: #253c2d;
+  color: var(--ok);
+}
+
+.status-completed {
+  background: #253c2d;
+  color: var(--ok);
+}
+
+.status-failed,
+.status-paused_rate_limit {
+  background: #482727;
+  color: var(--err);
+}
+
+.status-paused {
+  background: #44391f;
+  color: var(--warn);
+}
+
+.status-pending,
+.status-queued {
+  background: #29313a;
+  color: var(--text-dim);
+}
+
+.items {
+  max-height: 500px;
+  overflow-y: auto;
+}
+
+.item {
+  border-bottom: 1px solid var(--border);
+  padding: 12px 0;
+}
+
+.item:last-child {
+  border-bottom: none;
+}
+
+.address {
+  font-family: var(--mono);
+  font-size: .78rem;
+  word-break: break-all;
+}
+
+.item-meta {
+  margin-top: 6px;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-dim);
+  font-size: .75rem;
+}
+
+.download-report {
+  margin-top: 8px;
+  padding: 7px 10px;
+  font-size: .75rem;
+  background: transparent;
+  border: 1px solid var(--ok);
+  color: var(--ok);
+}
+
+.hint {
+  color: var(--text-dim);
+  font-size: .78rem;
+  margin-top: -8px;
+  margin-bottom: 12px;
+}
+
+.error-box {
+  background: #3d2424;
+  color: #ffaaa2;
+  padding: 10px;
+  border-radius: 7px;
+  font-size: .8rem;
+  word-break: break-word;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.actions button {
+  flex: 1;
+}
+
+.hidden {
+  display: none !important;
+}
+
 </style>
 </head>
+
 <body>
+
 <div class="wrap">
-  <header>
-    <h1>Contract Auditor</h1>
-    <p>Fetch verified source from Etherscan, resolve proxies, run a security audit via your OpenAI backend.</p>
-  </header>
 
-  <div class="panel">
-    <h2>Backend</h2>
-    <label for="baseUrl">This app's own API base URL (leave blank if this page and its /api are on the same domain — normally true, leave it blank)</label>
-    <input type="text" id="baseUrl" placeholder="https://your-project.vercel.app" />
-    <div class="hint">This is NOT where the AI model lives. It's only for this page's own backend, and only needed if this page is hosted somewhere other than the Vercel deployment itself (e.g. GitHub Pages calling a separate Vercel backend).</div>
+<header>
 
-    <label for="llmUrl">LLM endpoint URL (chat completions)</label>
-    <input type="text" id="llmUrl" placeholder="https://api.openai.com/v1/chat/completions" />
-    <div class="hint">Full URL of the chat-completions endpoint the audit call is sent to. Defaults to OpenAI's. Use this field for OpenAI-compatible providers, e.g. https://kiosapi.com/v1/chat/completions.</div>
+<h1>Contract Auditor</h1>
 
-    <label for="etherscanKey">Etherscan API key</label>
-    <input type="text" id="etherscanKey" placeholder="Etherscan API key" autocomplete="off" />
+<p>
+Persistent smart contract auditing with batch processing,
+automatic checkpoints and restart recovery.
+</p>
 
-    <label for="openaiKey">LLM provider API key</label>
-    <input type="text" id="openaiKey" placeholder="sk-..." autocomplete="off" />
-    <div class="hint">Keys are saved only in this browser's local storage on this device — never sent to GitHub, never synced. If you clear browser data or switch devices, you'll need to re-enter them. Anyone with access to this unlocked device and browser could read them via dev tools, so don't use this on a shared device.</div>
-  </div>
+</header>
 
-  <div class="panel">
-    <h2>Target</h2>
-    <label for="chain">Chain</label>
-    <select id="chain">
-      <option value="1">Ethereum mainnet</option>
-      <option value="56">BNB Smart Chain</option>
-      <option value="137">Polygon</option>
-      <option value="42161">Arbitrum One</option>
-      <option value="10">Optimism</option>
-      <option value="8453">Base</option>
-    </select>
 
-    <div class="mode-toggle">
-      <button id="modeSingleBtn" class="active">Single address</button>
-      <button id="modeBatchBtn">Batch</button>
-    </div>
+<!-- SETTINGS -->
 
-    <div id="singlePane">
-      <label for="singleAddr">Contract address</label>
-      <input type="text" id="singleAddr" placeholder="0x..." />
-    </div>
+<div class="panel">
 
-    <div id="batchPane" style="display:none;">
-      <label for="batchAddrs">Addresses, one per line</label>
-      <textarea id="batchAddrs" placeholder="0xabc...&#10;0xdef..."></textarea>
-      <div class="file-row">
-        <label style="margin:0;">or upload a .txt / .csv file:</label>
-        <input type="file" id="fileInput" accept=".txt,.csv" />
-      </div>
-    </div>
-  </div>
+<h2>Backend & API Settings</h2>
 
-  <div class="panel">
-    <h2>Audit prompt</h2>
-    <label for="model">Model name</label>
-    <input type="text" id="model" value="gpt-4o-mini" />
-    <label for="systemPrompt">System prompt (edit this to change what gets audited for)</label>
-    <textarea id="systemPrompt"></textarea>
-    <div class="hint">This is the only thing that should change between runs — target, chain, and code all get filled in automatically per contract.</div>
-  </div>
+<label>Backend URL</label>
 
-  <button class="run" id="runBtn">Run audit</button>
-  <button class="secondary" id="downloadBtn" style="display:none;">Download results (.zip)</button>
+<input
+  id="baseUrl"
+  placeholder="Leave blank when hosted on same Render server"
+/>
 
-  <div class="panel" id="logPanel" style="display:none; margin-top:16px;">
-    <h2>Progress</h2>
-    <div class="log" id="log"></div>
-  </div>
+<label>LLM Endpoint</label>
+
+<input
+  id="llmUrl"
+  placeholder="https://aihubmix.com/v1/chat/completions"
+/>
+
+<label>LLM API Key</label>
+
+<input
+  id="openaiKey"
+  type="password"
+  placeholder="API key"
+/>
+
+<label>Etherscan API Key</label>
+
+<input
+  id="etherscanKey"
+  type="password"
+  placeholder="Explorer API key"
+/>
+
+<p class="hint">
+Your keys are stored in this browser for convenience.
+The batch backend uses them only for processing your submitted batch.
+</p>
+
 </div>
 
+
+<!-- TARGET -->
+
+<div class="panel">
+
+<h2>Target</h2>
+
+<label>Chain</label>
+
+<select id="chain">
+
+<option value="1">Ethereum</option>
+<option value="56">BNB Smart Chain</option>
+<option value="137">Polygon</option>
+<option value="42161">Arbitrum</option>
+<option value="10">Optimism</option>
+<option value="8453">Base</option>
+
+</select>
+
+
+<div class="mode-row">
+
+<button
+  id="singleMode"
+  class="active"
+>
+Single
+</button>
+
+<button
+  id="batchMode"
+>
+Batch
+</button>
+
+</div>
+
+
+<div id="singlePane">
+
+<label>Contract Address</label>
+
+<input
+  id="singleAddress"
+  placeholder="0x..."
+/>
+
+</div>
+
+
+<div
+  id="batchPane"
+  class="hidden"
+>
+
+<label>
+Paste addresses / JSON / JSONL
+</label>
+
+<textarea
+  id="batchInput"
+  placeholder='0x123...
+
+0x456...
+
+or JSON:
+
+["0x123...", "0x456..."]
+
+or JSONL:
+
+{"address":"0x123..."}
+{"address":"0x456..."}'
+></textarea>
+
+
+<label>
+Or upload a file
+</label>
+
+<input
+  type="file"
+  id="fileInput"
+  accept=".txt,.csv,.json,.jsonl"
+/>
+
+<p class="hint">
+
+Supported:
+TXT, CSV, JSON and JSONL.
+
+Duplicates are automatically removed.
+
+</p>
+
+</div>
+
+</div>
+
+
+<!-- AUDIT SETTINGS -->
+
+<div class="panel">
+
+<h2>Audit Settings</h2>
+
+<label>Model</label>
+
+<input
+  id="model"
+  value="gpt-4o-mini"
+/>
+
+
+<label>System Prompt</label>
+
+<textarea id="systemPrompt"></textarea>
+
+</div>
+
+
+<button
+  id="startBtn"
+  class="primary"
+>
+Start Audit
+</button>
+
+
+<!-- BATCH DASHBOARD -->
+
+<div
+  id="dashboard"
+  class="panel hidden"
+  style="margin-top:16px"
+>
+
+<h2>Batch Progress</h2>
+
+<div>
+
+Batch ID:
+
+<span
+  id="batchId"
+  style="font-family:monospace"
+></span>
+
+</div>
+
+
+<div
+  id="batchStatus"
+  style="margin-top:10px"
+></div>
+
+
+<div class="progress-bar">
+
+<div
+  id="progressFill"
+  class="progress-fill"
+></div>
+
+</div>
+
+
+<div
+  id="progressText"
+  style="text-align:center;color:var(--text-dim)"
+></div>
+
+
+<div class="stats">
+
+<div class="stat">
+
+<div
+  id="completedCount"
+  class="stat-value"
+>
+0
+</div>
+
+<div class="stat-label">
+Completed
+</div>
+
+</div>
+
+
+<div class="stat">
+
+<div
+  id="failedCount"
+  class="stat-value"
+>
+0
+</div>
+
+<div class="stat-label">
+Failed / Skipped
+</div>
+
+</div>
+
+
+<div class="stat">
+
+<div
+  id="remainingCount"
+  class="stat-value"
+>
+0
+</div>
+
+<div class="stat-label">
+Remaining
+</div>
+
+</div>
+
+
+<div class="stat">
+
+<div
+  id="totalCount"
+  class="stat-value"
+>
+0
+</div>
+
+<div class="stat-label">
+Total
+</div>
+
+</div>
+
+</div>
+
+
+<div
+  id="batchError"
+  class="hidden"
+  style="margin-top:12px"
+></div>
+
+
+<div class="actions">
+
+<button
+  id="pauseBtn"
+  class="secondary"
+>
+Pause
+</button>
+
+<button
+  id="resumeBtn"
+  class="secondary"
+>
+Resume
+</button>
+
+</div>
+
+</div>
+
+
+<!-- RESULTS -->
+
+<div
+  id="resultsPanel"
+  class="panel hidden"
+>
+
+<h2>Contracts</h2>
+
+<div
+  id="items"
+  class="items"
+></div>
+
+</div>
+
+</div>
+
+
 <script>
-const DEFAULT_PROMPT = `You are a smart contract security auditor reviewing Solidity source code pulled from a block explorer.
 
-For the contract provided, identify vulnerabilities and risks, including but not limited to: reentrancy, integer overflow/underflow, access control gaps, unchecked external calls, front-running, denial of service vectors, logic errors, timestamp/block dependence, oracle manipulation, and unsafe use of delegatecall or self-destruct.
 
-For each finding, report:
-- Severity: Critical / High / Medium / Low / Informational
-- Location: contract and function name
-- Description: what the issue is and how it could be exploited
-- Recommendation: a concrete fix
+// ============================================================
+// DEFAULT PROMPT
+// ============================================================
 
-Skip categories with no findings rather than stating "none found." End with a short overall risk summary (2-4 sentences).`;
+const DEFAULT_PROMPT = `You are a smart contract security auditor reviewing Solidity source code.
 
-document.getElementById('systemPrompt').value =
-  localStorage.getItem('auditor_prompt') || DEFAULT_PROMPT;
-document.getElementById('model').value =
-  localStorage.getItem('auditor_model') || 'gpt-4o-mini';
-document.getElementById('baseUrl').value =
-  localStorage.getItem('auditor_base_url') || '';
-document.getElementById('llmUrl').value =
-  localStorage.getItem('auditor_llm_url') || 'https://api.openai.com/v1/chat/completions';
-document.getElementById('etherscanKey').value =
-  localStorage.getItem('auditor_etherscan_key') || '';
-document.getElementById('openaiKey').value =
-  localStorage.getItem('auditor_openai_key') || '';
+Identify vulnerabilities and risks including:
 
-document.getElementById('baseUrl').addEventListener('input', (e) => {
-  localStorage.setItem('auditor_base_url', e.target.value.trim());
-});
-document.getElementById('llmUrl').addEventListener('input', (e) => {
-  localStorage.setItem('auditor_llm_url', e.target.value.trim());
-});
-document.getElementById('etherscanKey').addEventListener('input', (e) => {
-  localStorage.setItem('auditor_etherscan_key', e.target.value.trim());
-});
-document.getElementById('openaiKey').addEventListener('input', (e) => {
-  localStorage.setItem('auditor_openai_key', e.target.value.trim());
-});
+- Reentrancy
+- Access control vulnerabilities
+- Integer issues
+- Unchecked external calls
+- Front-running
+- Denial of service
+- Logic errors
+- Oracle manipulation
+- Dangerous delegatecall usage
+- Proxy vulnerabilities
+- Privileged functions
+- Fee manipulation
+- Liquidity manipulation
 
-function apiBase() {
-  const v = document.getElementById('baseUrl').value.trim();
-  return v.replace(/\/+$/, '');
-}
+For each finding provide:
 
-document.getElementById('systemPrompt').addEventListener('input', (e) => {
-  localStorage.setItem('auditor_prompt', e.target.value);
-});
-document.getElementById('model').addEventListener('input', (e) => {
-  localStorage.setItem('auditor_model', e.target.value);
-});
+- Severity
+- Location
+- Description
+- Impact
+- Recommendation
+
+End with an overall risk summary.
+
+Do not claim a vulnerability exists unless supported by the source code.`;
+
+
+// ============================================================
+// ELEMENTS
+// ============================================================
+
+const $ = id => document.getElementById(id);
+
+const baseUrl = $('baseUrl');
+const llmUrl = $('llmUrl');
+const openaiKey = $('openaiKey');
+const etherscanKey = $('etherscanKey');
+
+const chain = $('chain');
+
+const model = $('model');
+const systemPrompt = $('systemPrompt');
+
+const singleMode = $('singleMode');
+const batchMode = $('batchMode');
+
+const singlePane = $('singlePane');
+const batchPane = $('batchPane');
+
+const singleAddress = $('singleAddress');
+const batchInput = $('batchInput');
+const fileInput = $('fileInput');
+
+const startBtn = $('startBtn');
+
+const dashboard = $('dashboard');
+const resultsPanel = $('resultsPanel');
+
+const batchIdEl = $('batchId');
+const batchStatus = $('batchStatus');
+
+const progressFill = $('progressFill');
+const progressText = $('progressText');
+
+const completedCount = $('completedCount');
+const failedCount = $('failedCount');
+const remainingCount = $('remainingCount');
+const totalCount = $('totalCount');
+
+const batchError = $('batchError');
+
+const pauseBtn = $('pauseBtn');
+const resumeBtn = $('resumeBtn');
+
+const itemsEl = $('items');
+
+
+// ============================================================
+// STATE
+// ============================================================
 
 let mode = 'single';
-const modeSingleBtn = document.getElementById('modeSingleBtn');
-const modeBatchBtn = document.getElementById('modeBatchBtn');
-const singlePane = document.getElementById('singlePane');
-const batchPane = document.getElementById('batchPane');
 
-modeSingleBtn.addEventListener('click', () => {
+let currentBatchId =
+  localStorage.getItem(
+    'contract_auditor_active_batch'
+  ) || null;
+
+let pollTimer = null;
+
+
+// ============================================================
+// LOAD SAVED SETTINGS
+// ============================================================
+
+baseUrl.value =
+  localStorage.getItem('auditor_base_url') || '';
+
+llmUrl.value =
+  localStorage.getItem('auditor_llm_url') ||
+  'https://aihubmix.com/v1/chat/completions';
+
+openaiKey.value =
+  localStorage.getItem('auditor_openai_key') || '';
+
+etherscanKey.value =
+  localStorage.getItem('auditor_etherscan_key') || '';
+
+model.value =
+  localStorage.getItem('auditor_model') ||
+  'gpt-4o-mini';
+
+systemPrompt.value =
+  localStorage.getItem('auditor_prompt') ||
+  DEFAULT_PROMPT;
+
+
+// ============================================================
+// SAVE SETTINGS
+// ============================================================
+
+[
+  [baseUrl, 'auditor_base_url'],
+  [llmUrl, 'auditor_llm_url'],
+  [openaiKey, 'auditor_openai_key'],
+  [etherscanKey, 'auditor_etherscan_key'],
+  [model, 'auditor_model'],
+  [systemPrompt, 'auditor_prompt']
+]
+.forEach(([element, key]) => {
+
+  element.addEventListener(
+    'input',
+    () => {
+
+      localStorage.setItem(
+        key,
+        element.value
+      );
+
+    }
+  );
+
+});
+
+
+// ============================================================
+// API BASE
+// ============================================================
+
+function apiBase() {
+
+  return baseUrl.value
+    .trim()
+    .replace(/\/+$/, '');
+
+}
+
+
+// ============================================================
+// MODE
+// ============================================================
+
+singleMode.onclick = () => {
+
   mode = 'single';
-  modeSingleBtn.classList.add('active');
-  modeBatchBtn.classList.remove('active');
-  singlePane.style.display = '';
-  batchPane.style.display = 'none';
-});
-modeBatchBtn.addEventListener('click', () => {
-  mode = 'batch';
-  modeBatchBtn.classList.add('active');
-  modeSingleBtn.classList.remove('active');
-  singlePane.style.display = 'none';
-  batchPane.style.display = '';
-});
 
-document.getElementById('fileInput').addEventListener('change', (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = () => {
-    document.getElementById('batchAddrs').value = reader.result;
-  };
-  reader.readAsText(file);
-});
+  singleMode.classList.add('active');
+  batchMode.classList.remove('active');
 
-const ADDR_RE = /^0x[a-fA-F0-9]{40}$/;
+  singlePane.classList.remove('hidden');
+  batchPane.classList.add('hidden');
 
-function parseAddresses(raw) {
-  return raw
-    .split(/[\r\n,]+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
-function errText(e) {
-  if (!e) return 'unknown error';
-  if (typeof e === 'string') return e;
-  if (e.message) return e.message;
-  try { return JSON.stringify(e); } catch { return String(e); }
-}
-
-function logLine(status, addr, msg) {
-  const log = document.getElementById('log');
-  const el = document.createElement('div');
-  el.className = 'log-line';
-  el.innerHTML = `<span class="status ${status}">${status}</span><span class="addr">${addr}</span><span class="msg">${msg}</span>`;
-  log.appendChild(el);
-  log.scrollTop = log.scrollHeight;
-}
-
-function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
-
-const CHAIN_NAMES = {
-  '1': 'ethereum', '56': 'bsc', '137': 'polygon',
-  '42161': 'arbitrum', '10': 'optimism', '8453': 'base',
 };
 
-let results = [];
 
-async function processAddress(address, chainId) {
-  const chainName = CHAIN_NAMES[chainId] || chainId;
+batchMode.onclick = () => {
 
-  const etherRes = await fetch(`${apiBase()}/api/etherscan?address=${address}&chainId=${chainId}`, {
-    headers: { 'x-etherscan-key': document.getElementById('etherscanKey').value.trim() },
-  });
-  let etherData;
-  try {
-    etherData = await etherRes.json();
-  } catch {
-    logLine('err', address, `server returned a non-JSON response (HTTP ${etherRes.status}) — check the deployed function logs`);
-    return null;
+  mode = 'batch';
+
+  batchMode.classList.add('active');
+  singleMode.classList.remove('active');
+
+  singlePane.classList.add('hidden');
+  batchPane.classList.remove('hidden');
+
+};
+
+
+// ============================================================
+// FILE UPLOAD
+// ============================================================
+
+fileInput.addEventListener(
+  'change',
+  event => {
+
+    const file =
+      event.target.files[0];
+
+    if (!file) return;
+
+
+    const reader =
+      new FileReader();
+
+
+    reader.onload = () => {
+
+      batchInput.value =
+        String(reader.result || '');
+
+    };
+
+
+    reader.readAsText(file);
+
   }
-
-  if (etherData.error) {
-    logLine('err', address, errText(etherData.error));
-    return null;
-  }
-  if (!etherData.verified) {
-    logLine('skip', address, 'not verified — skipped');
-    return null;
-  }
-  if (etherData.isProxy && !etherData.source) {
-    logLine('err', address, etherData.note || 'proxy implementation not verified — skipped');
-    return null;
-  }
-
-  const proxyNote = etherData.isProxy ? ` (proxy → ${etherData.implementation})` : '';
-  logLine('pending', address, `fetched ${etherData.contractName}${proxyNote}, auditing...`);
-
-  const model = document.getElementById('model').value.trim() || 'gpt-4o-mini';
-  const systemPrompt = document.getElementById('systemPrompt').value;
-
-// Start the audit job.
-// This request should return almost immediately.
-const auditRes = await fetch(`${apiBase()}/api/audit`, {
-  method: 'POST',
-
-  headers: {
-    'Content-Type': 'application/json',
-    'x-openai-key': document.getElementById('openaiKey').value.trim(),
-  },
-
-  body: JSON.stringify({
-    source: etherData.source,
-    systemPrompt,
-    model,
-    contractName: etherData.contractName,
-    address,
-    llmUrl: document.getElementById('llmUrl').value.trim(),
-  }),
-});
-
-let auditJob;
-
-try {
-  auditJob = await auditRes.json();
-} catch {
-  logLine(
-    'err',
-    address,
-    `server returned a non-JSON response (HTTP ${auditRes.status})`
-  );
-  return null;
-}
-
-if (!auditRes.ok || auditJob.error) {
-  logLine('err', address, errText(auditJob.error));
-  return null;
-}
-
-const jobId = auditJob.jobId;
-
-if (!jobId) {
-  logLine('err', address, 'server did not return an audit job ID');
-  return null;
-}
-
-logLine(
-  'pending',
-  address,
-  'audit running...'
 );
 
-// Poll the job until it finishes.
-while (true) {
 
-  await sleep(2000);
+// ============================================================
+// START
+// ============================================================
 
-  const statusRes = await fetch(
-    `${apiBase()}/api/audit/${encodeURIComponent(jobId)}`
-  );
-
-  let statusData;
+startBtn.onclick = async () => {
 
   try {
-    statusData = await statusRes.json();
-  } catch {
-    logLine(
-      'err',
-      address,
-      `status request returned non-JSON response (HTTP ${statusRes.status})`
-    );
-    return null;
-  }
 
-  if (!statusRes.ok || statusData.error) {
-    logLine(
-      'err',
-      address,
-      errText(statusData.error)
-    );
-    return null;
-  }
+    startBtn.disabled = true;
 
-  if (statusData.status === 'running') {
-    logLine(
-      'pending',
-      address,
-      'LLM analysis running...'
-    );
-    continue;
-  }
 
-  if (statusData.status === 'failed') {
-    logLine(
-      'err',
-      address,
-      statusData.error || 'audit failed'
-    );
-    return null;
-  }
-
-  if (statusData.status === 'completed') {
-
-    logLine(
-      'ok',
-      address,
-      `done${statusData.truncated ? ' (source truncated)' : ''}`
-    );
-
-    return {
-      address,
-      chain: chainName,
-      contractName: etherData.contractName,
-      isProxy: etherData.isProxy,
-      implementation: etherData.implementation,
-      audit: statusData.result,
-    };
-  }
-}
-  const auditData = await auditRes.json();
-
-  if (auditData.error) {
-    logLine('err', address, errText(auditData.error));
-    return null;
-  }
-
-  logLine('ok', address, `done${auditData.truncated ? ' (source truncated)' : ''}`);
-
-  return {
-    address,
-    chain: chainName,
-    contractName: etherData.contractName,
-    isProxy: etherData.isProxy,
-    implementation: etherData.implementation,
-    audit: auditData.result,
-  };
-}
-
-document.getElementById('runBtn').addEventListener('click', async () => {
-  const chainId = document.getElementById('chain').value;
-  let addresses = [];
-
-  if (mode === 'single') {
-    const a = document.getElementById('singleAddr').value.trim();
-    if (!ADDR_RE.test(a)) { alert('Enter a valid contract address.'); return; }
-    addresses = [a];
-  } else {
-    addresses = parseAddresses(document.getElementById('batchAddrs').value);
-    addresses = addresses.filter((a) => {
-      const valid = ADDR_RE.test(a);
-      if (!valid) logLine('err', a, 'not a valid address — skipped');
-      return valid;
-    });
-    if (!addresses.length) { alert('No valid addresses found.'); return; }
-  }
-
-  document.getElementById('logPanel').style.display = '';
-  document.getElementById('log').innerHTML = '';
-  document.getElementById('downloadBtn').style.display = 'none';
-  document.getElementById('runBtn').disabled = true;
-  document.getElementById('runBtn').textContent = 'Running...';
-
-  results = [];
-
-  for (const addr of addresses) {
-    logLine('pending', addr, 'fetching source...');
-    try {
-      const r = await processAddress(addr, chainId);
-      if (r) results.push(r);
-    } catch (e) {
-      logLine('err', addr, String(e.message || e));
+    if (
+      !openaiKey.value.trim()
+    ) {
+      throw new Error(
+        'Enter your LLM API key'
+      );
     }
-    await sleep(300);
+
+
+    if (
+      !etherscanKey.value.trim()
+    ) {
+      throw new Error(
+        'Enter your Etherscan API key'
+      );
+    }
+
+
+    if (mode === 'single') {
+
+      const address =
+        singleAddress.value.trim();
+
+
+      if (!address) {
+        throw new Error(
+          'Enter a contract address'
+        );
+      }
+
+
+      batchInput.value =
+        address;
+
+    }
+
+
+    const rawInput =
+      batchInput.value.trim();
+
+
+    if (!rawInput) {
+
+      throw new Error(
+        'Enter or upload addresses'
+      );
+
+    }
+
+
+    const response =
+      await fetch(
+        `${apiBase()}/api/batch`,
+        {
+          method: 'POST',
+
+          headers: {
+            'Content-Type':
+              'application/json',
+
+            'x-openai-key':
+              openaiKey.value.trim(),
+
+            'x-etherscan-key':
+              etherscanKey.value.trim()
+          },
+
+          body: JSON.stringify({
+
+            rawInput,
+
+            chainId:
+              chain.value,
+
+            model:
+              model.value.trim(),
+
+            systemPrompt:
+              systemPrompt.value,
+
+            llmUrl:
+              llmUrl.value.trim()
+
+          })
+        }
+      );
+
+
+    const data =
+      await response.json();
+
+
+    if (!response.ok) {
+
+      throw new Error(
+        data.error ||
+        'Could not start batch'
+      );
+
+    }
+
+
+    currentBatchId =
+      data.batchId;
+
+
+    localStorage.setItem(
+      'contract_auditor_active_batch',
+      currentBatchId
+    );
+
+
+    dashboard.classList.remove(
+      'hidden'
+    );
+
+    resultsPanel.classList.remove(
+      'hidden'
+    );
+
+
+    batchIdEl.textContent =
+      currentBatchId;
+
+
+    await refreshBatch();
+
+
+    startPolling();
+
+
+  } catch (error) {
+
+    alert(
+      error.message ||
+      String(error)
+    );
+
+  } finally {
+
+    startBtn.disabled = false;
+
   }
 
-  document.getElementById('runBtn').disabled = false;
-  document.getElementById('runBtn').textContent = 'Run audit';
+};
 
-  if (results.length) {
-    document.getElementById('downloadBtn').style.display = '';
+
+// ============================================================
+// REFRESH BATCH
+// ============================================================
+
+async function refreshBatch() {
+
+  if (!currentBatchId) return;
+
+
+  try {
+
+    const response =
+      await fetch(
+        `${apiBase()}/api/batch/${encodeURIComponent(currentBatchId)}`
+      );
+
+
+    const batch =
+      await response.json();
+
+
+    if (!response.ok) {
+
+      throw new Error(
+        batch.error ||
+        'Could not load batch'
+      );
+
+    }
+
+
+    renderBatch(batch);
+
+
+  } catch (error) {
+
+    console.error(
+      'Batch refresh error:',
+      error
+    );
+
   }
-});
 
-document.getElementById('downloadBtn').addEventListener('click', async () => {
-  if (!results.length) return;
-
-  if (results.length === 1) {
-    const r = results[0];
-    const blob = new Blob([formatResult(r)], { type: 'text/plain' });
-    triggerDownload(blob, `${r.chain}_${r.address}.txt`);
-    return;
-  }
-
-  const zip = new JSZip();
-  for (const r of results) {
-    zip.file(`${r.chain}_${r.address}_${safe(r.contractName)}.txt`, formatResult(r));
-  }
-  const blob = await zip.generateAsync({ type: 'blob' });
-  triggerDownload(blob, `contract-audits-${Date.now()}.zip`);
-});
-
-function safe(s) { return (s || 'contract').replace(/[^a-z0-9_-]/gi, '_'); }
-
-function formatResult(r) {
-  return [
-    `Address: ${r.address}`,
-    `Chain: ${r.chain}`,
-    `Contract: ${r.contractName}`,
-    r.isProxy ? `Proxy implementation: ${r.implementation}` : null,
-    '',
-    '--- AUDIT ---',
-    '',
-    r.audit,
-  ].filter((x) => x !== null).join('\n');
 }
 
-function triggerDownload(blob, filename) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+
+// ============================================================
+// RENDER
+// ============================================================
+
+function renderBatch(batch) {
+
+  dashboard.classList.remove(
+    'hidden'
+  );
+
+  resultsPanel.classList.remove(
+    'hidden'
+  );
+
+
+  batchIdEl.textContent =
+    batch.batchId;
+
+
+  const status =
+    batch.status || 'unknown';
+
+
+  batchStatus.innerHTML = `
+    <span class="
+      status-badge
+      status-${status}
+    ">
+      ${status}
+    </span>
+  `;
+
+
+  const total =
+    batch.total || 0;
+
+  const completed =
+    batch.completed || 0;
+
+  const failed =
+    batch.failed || 0;
+
+  const done =
+    completed + failed;
+
+  const remaining =
+    Math.max(
+      total - done,
+      0
+    );
+
+
+  const percent =
+    total
+      ? Math.round(
+          (done / total) * 100
+        )
+      : 0;
+
+
+  progressFill.style.width =
+    `${percent}%`;
+
+
+  progressText.textContent =
+    `${done} / ${total} (${percent}%)`;
+
+
+  completedCount.textContent =
+    completed;
+
+  failedCount.textContent =
+    failed;
+
+  remainingCount.textContent =
+    remaining;
+
+  totalCount.textContent =
+    total;
+
+
+  if (batch.lastError) {
+
+    batchError.classList.remove(
+      'hidden'
+    );
+
+    batchError.className =
+      'error-box';
+
+    batchError.textContent =
+      batch.lastError;
+
+  } else {
+
+    batchError.classList.add(
+      'hidden'
+    );
+
+  }
+
+
+  renderItems(
+    batch.items || []
+  );
+
+
+  pauseBtn.disabled =
+    !['running', 'queued']
+      .includes(status);
+
+
+  resumeBtn.disabled =
+    ![
+      'paused',
+      'paused_rate_limit',
+      'interrupted'
+    ]
+    .includes(status);
+
+
+  if (
+    status === 'completed'
+  ) {
+
+    stopPolling();
+
+  }
+
 }
+
+
+// ============================================================
+// RENDER ITEMS
+// ============================================================
+
+function renderItems(items) {
+
+  itemsEl.innerHTML = '';
+
+
+  for (const item of items) {
+
+    const row =
+      document.createElement('div');
+
+
+    row.className =
+      'item';
+
+
+    const status =
+      item.status ||
+      'pending';
+
+
+    row.innerHTML = `
+
+      <div class="address">
+
+        #${item.index + 1}
+        ${escapeHtml(item.address)}
+
+      </div>
+
+      <div class="item-meta">
+
+        <span>
+          ${escapeHtml(
+            item.contractName ||
+            'Unknown'
+          )}
+        </span>
+
+        <span class="
+          status-badge
+          status-${status}
+        ">
+
+          ${status}
+
+        </span>
+
+      </div>
+
+      ${
+        item.error
+          ? `
+            <div
+              style="
+                color:var(--err);
+                font-size:.75rem;
+                margin-top:6px
+              "
+            >
+              ${escapeHtml(item.error)}
+            </div>
+          `
+          : ''
+      }
+
+    `;
+
+
+    if (
+      status === 'completed'
+    ) {
+
+      const download =
+        document.createElement(
+          'button'
+        );
+
+
+      download.className =
+        'download-report';
+
+
+      download.textContent =
+        'Download Report';
+
+
+      download.onclick = () => {
+
+        const url =
+          `${apiBase()}/api/batch/${encodeURIComponent(currentBatchId)}/report/${encodeURIComponent(item.address)}`;
+
+
+        window.location.href =
+          url;
+
+      };
+
+
+      row.appendChild(
+        download
+      );
+
+    }
+
+
+    itemsEl.appendChild(
+      row
+    );
+
+  }
+
+}
+
+
+// ============================================================
+// HTML ESCAPE
+// ============================================================
+
+function escapeHtml(value) {
+
+  const div =
+    document.createElement('div');
+
+
+  div.textContent =
+    String(value || '');
+
+
+  return div.innerHTML;
+
+}
+
+
+// ============================================================
+// PAUSE
+// ============================================================
+
+pauseBtn.onclick =
+async () => {
+
+  if (!currentBatchId) return;
+
+
+  await fetch(
+    `${apiBase()}/api/batch/${encodeURIComponent(currentBatchId)}/pause`,
+    {
+      method: 'POST'
+    }
+  );
+
+
+  await refreshBatch();
+
+};
+
+
+// ============================================================
+// RESUME
+// ============================================================
+
+resumeBtn.onclick =
+async () => {
+
+  if (!currentBatchId) return;
+
+
+  await fetch(
+    `${apiBase()}/api/batch/${encodeURIComponent(currentBatchId)}/resume`,
+    {
+      method: 'POST'
+    }
+  );
+
+
+  await refreshBatch();
+
+  startPolling();
+
+};
+
+
+// ============================================================
+// POLLING
+// ============================================================
+
+function startPolling() {
+
+  stopPolling();
+
+
+  pollTimer =
+    setInterval(
+      refreshBatch,
+      3000
+    );
+
+}
+
+
+function stopPolling() {
+
+  if (pollTimer) {
+
+    clearInterval(
+      pollTimer
+    );
+
+    pollTimer = null;
+
+  }
+
+}
+
+
+// ============================================================
+// RECOVER ACTIVE BATCH AFTER RELOAD
+// ============================================================
+
+window.addEventListener(
+  'load',
+  async () => {
+
+    if (!currentBatchId) return;
+
+
+    console.log(
+      'Recovering batch:',
+      currentBatchId
+    );
+
+
+    await refreshBatch();
+
+    startPolling();
+
+  }
+);
+
+
 </script>
+
 </body>
-    </html>
+</html>
+
