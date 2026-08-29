@@ -1135,35 +1135,43 @@ async function processBatchItem(
         item._id
     },
     {
-      $set: {
+     $set: {
+  status: 'completed',
 
-        status:
-          'completed',
+  // Address user originally submitted
+  address: address,
 
-        contractName:
-          contract.contractName,
+  // Actual contract address audited
+  auditedAddress:
+    contract.auditedAddress || address,
 
-        compilerVersion:
-          contract.compilerVersion,
+  contractName:
+    contract.contractName,
 
-        implementation:
-          contract.implementation,
+  compilerVersion:
+    contract.compilerVersion,
 
-        source:
-          contract.source,
+  // Proxy metadata
+  isProxy:
+    contract.isProxy || false,
 
-        audit:
-          audit.result,
+  implementation:
+    contract.implementation || null,
 
-        truncated:
-          audit.truncated,
+  // IMPORTANT:
+  // This is implementation source for proxies
+  source:
+    contract.source,
 
-        finishedAt:
-          now(),
+  audit:
+    audit.result,
 
-        error:
-          null
-      }
+  truncated:
+    audit.truncated,
+
+  finishedAt:
+    now()
+     }
     }
   );
 
