@@ -1,4 +1,4 @@
-```js
+
 // api/batch.js
 
 const crypto =
@@ -2695,4 +2695,3 @@ module.exports = {
 
   resumePendingBatches
 };
-```
