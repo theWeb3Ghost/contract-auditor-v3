@@ -609,6 +609,23 @@ Pause
 Resume
 </button>
 
+<button
+  id="restartBtn"
+  class="secondary"
+  type="button"
+>
+  ↻ Restart From Beginning
+</button>
+
+<button
+  id="clearBtn"
+  class="danger"
+  type="button"
+>
+  🗑 Clear Batch
+</button>
+
+
 </div>
 
 </div>
@@ -1090,6 +1107,38 @@ function renderBatch(batch) {
 
   const status =
     batch.status || 'unknown';
+  
+const statusLabels = {
+  queued:
+    'Queued',
+
+  running:
+    'Running',
+
+  completed:
+    'Completed',
+
+  paused:
+    'Paused',
+
+  paused_rate_limit:
+    'Rate Limited — Paused',
+
+  paused_quota:
+    'AI Quota — Paused',
+
+  interrupted:
+    'Interrupted — Resume Available',
+
+  cancelled:
+    'Cancelled'
+};
+
+const readableStatus =
+  statusLabels[status] ||
+  status;
+
+
 
 
   batchStatus.innerHTML = `
@@ -1097,7 +1146,7 @@ function renderBatch(batch) {
       status-badge
       status-${status}
     ">
-      ${status}
+      ${readableStatus}
     </span>
   `;
 
@@ -1108,11 +1157,9 @@ function renderBatch(batch) {
   const completed =
     batch.completed || 0;
 
-  const failed =
-    batch.failed || 0;
-
-  const done =
-    completed + failed;
+  const failed = batch.failed || 0; 
+  const skipped = batch.skipped || 0; 
+  const done = completed + failed + skipped;
 
   const remaining =
     Math.max(
@@ -1188,6 +1235,13 @@ function renderBatch(batch) {
       'interrupted'
     ]
     .includes(status);
+
+  restartBtn.disabled =
+    
+  !currentBatchId ||
+  status === 'running';
+
+  clearBtn.disabled = !currentBatchId;
 
 
   if (
@@ -1384,6 +1438,196 @@ async () => {
   startPolling();
 
 };
+
+// ============================================================
+// RESTART FROM BEGINNING
+// ============================================================
+
+restartBtn.onclick =
+  async () => {
+
+    if (
+      !currentBatchId
+    ) {
+      return;
+    }
+
+
+    const confirmed =
+      confirm(
+        'Restart this batch from address #1?\n\n' +
+        'All previous audit results in this batch will be cleared.'
+      );
+
+
+    if (!confirmed) {
+      return;
+    }
+
+
+    restartBtn.disabled =
+      true;
+
+
+    try {
+
+      const response =
+        await fetch(
+          `${apiBase()}/api/batch/${encodeURIComponent(currentBatchId)}/restart`,
+          {
+            method:
+              'POST'
+          }
+        );
+
+
+      const data =
+        await response.json();
+
+
+      if (
+        !response.ok
+      ) {
+
+        throw new Error(
+          data.error ||
+          'Could not restart batch'
+        );
+      }
+
+
+      await refreshBatch();
+
+      startPolling();
+
+
+    } catch (error) {
+
+      alert(
+        error.message ||
+        String(error)
+      );
+
+
+    } finally {
+
+      restartBtn.disabled =
+        false;
+    }
+  };
+
+
+// ============================================================
+// CLEAR BATCH
+// ============================================================
+
+clearBtn.onclick =
+  async () => {
+
+    if (
+      !currentBatchId
+    ) {
+      return;
+    }
+
+
+    const confirmed =
+      confirm(
+        'CLEAR THIS BATCH?\n\n' +
+        'This permanently deletes the batch, its addresses, and its saved audit results.\n\n' +
+        'This cannot be undone.'
+      );
+
+
+    if (!confirmed) {
+      return;
+    }
+
+
+    clearBtn.disabled =
+      true;
+
+
+    try {
+
+      stopPolling();
+
+
+      const response =
+        await fetch(
+          `${apiBase()}/api/batch/${encodeURIComponent(currentBatchId)}`,
+          {
+            method:
+              'DELETE'
+          }
+        );
+
+
+      const data =
+        await response.json();
+
+
+      if (
+        !response.ok
+      ) {
+
+        throw new Error(
+          data.error ||
+          'Could not clear batch'
+        );
+      }
+
+
+      localStorage.removeItem(
+        'contract_auditor_active_batch'
+      );
+
+
+      currentBatchId =
+        null;
+
+
+      dashboard.classList.add(
+        'hidden'
+      );
+
+
+      resultsPanel.classList.add(
+        'hidden'
+      );
+
+
+      batchInput.value =
+        '';
+
+
+      fileInput.value =
+        '';
+
+
+      batchIdEl.textContent =
+        '—';
+
+
+      alert(
+        'Batch cleared. You can now start a new batch from the beginning.'
+      );
+
+
+    } catch (error) {
+
+      alert(
+        error.message ||
+        String(error)
+      );
+
+
+    } finally {
+
+      clearBtn.disabled =
+        false;
+    }
+  };
 
 
 // ============================================================
