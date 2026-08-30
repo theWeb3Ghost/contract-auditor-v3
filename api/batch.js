@@ -22,14 +22,78 @@ const {
 
 // Maximum source sent to the LLM.
 const MAX_SOURCE_CHARS =
-  60000;
+  150000;
 
-// Minimum time between LLM requests.
+// ============================================================
+// ADAPTIVE LLM RATE LEARNING
+// ============================================================
 //
-// 600ms ~= 1.67 requests/sec.
-// This stays below a 2 req/sec free-tier ceiling.
-const LLM_REQUEST_INTERVAL =
-  600;
+// The system learns the safest request interval for each:
+//
+// Provider + Model + API Key
+//
+// It starts conservatively, slowly probes faster after sustained
+// success, and slows down aggressively when a provider rate limit
+// is detected.
+//
+// The learned state is persisted in MongoDB, so restarting the
+// server does NOT reset the learned rate.
+// ============================================================
+
+const RATE_LEARNING = {
+
+  // Starting point for a completely unknown provider/profile.
+  //
+  // 600ms ~= 1.67 requests/sec.
+  DEFAULT_INTERVAL_MS:
+    600,
+
+  // Never go faster than this.
+  //
+  // This protects against the learner becoming too aggressive.
+  MIN_INTERVAL_MS:
+    300,
+
+  // Never become slower than this.
+  //
+  // Prevents pathological rate-limit loops from making the
+  // pipeline effectively unusable.
+  MAX_INTERVAL_MS:
+    30000,
+
+  // Number of successful LLM requests before we cautiously
+  // attempt to increase speed.
+  SUCCESS_THRESHOLD:
+    50,
+
+  // After SUCCESS_THRESHOLD consecutive successes:
+  //
+  // 1000ms -> 970ms
+  //
+  // Small changes make learning stable.
+  SUCCESS_SPEEDUP_FACTOR:
+    0.97,
+
+  // On rate limit:
+  //
+  // 600ms -> 900ms
+  //
+  // This is intentionally much more aggressive than speeding up.
+  RATE_LIMIT_SLOWDOWN_FACTOR:
+    1.5,
+
+  // Keep request timestamps for this rolling window.
+  WINDOW_MS:
+    10 * 60 * 1000,
+
+  // Hard cap on timestamps stored in memory/database.
+  MAX_HISTORY:
+    1000,
+
+  // Persist normal learning progress every N successful requests.
+  SAVE_EVERY_SUCCESSES:
+    10
+};
 
 // How long to wait between completed contracts.
 const ITEM_DELAY =
@@ -547,37 +611,516 @@ function sleep(
 
 
 // ============================================================
-// GLOBAL LLM THROTTLE
+// ADAPTIVE GLOBAL LLM RATE CONTROLLER
 // ============================================================
 //
-// One Node process = one Render worker.
+// One Node process may process multiple batches, but all LLM
+// requests pass through this single controller.
 //
-// This guarantees only one LLM request at a time and at least
-// 600ms between LLM requests.
+// The controller:
+//   1. Serializes LLM requests.
+//   2. Learns safe request intervals.
+//   3. Persists learning in MongoDB.
+//   4. Survives server restarts.
+//   5. Tracks recent request timestamps.
 // ============================================================
 
-let lastLLMRequestAt =
-  0;
+
+const rateProfiles =
+  new Map();
+
 
 let llmThrottle =
   Promise.resolve();
 
 
-function waitForLLMSlot() {
+// ============================================================
+// PROFILE KEY
+// ============================================================
+//
+// We never store the raw API key in the rate profile.
+//
+// Instead:
+//
+// SHA256(llmUrl + model + apiKey)
+//
+// This creates a stable identity for one provider/model/key
+// combination without exposing the key.
+// ============================================================
+
+function getRateProfileId({
+  llmUrl,
+  model,
+  apiKey
+}) {
+
+  return crypto
+    .createHash(
+      'sha256'
+    )
+    .update(
+      [
+        String(
+          llmUrl ||
+          ''
+        ),
+
+        String(
+          model ||
+          ''
+        ),
+
+        String(
+          apiKey ||
+          ''
+        )
+      ].join(
+        '|'
+      )
+    )
+    .digest(
+      'hex'
+    );
+}
+
+
+// ============================================================
+// CREATE DEFAULT PROFILE
+// ============================================================
+
+function createDefaultRateProfile({
+  profileId,
+  llmUrl,
+  model
+}) {
+
+  return {
+
+    _id:
+      profileId,
+
+    llmUrl:
+      llmUrl ||
+      null,
+
+    model:
+      model ||
+      null,
+
+
+    // --------------------------------------------------------
+    // CURRENT LEARNED STATE
+    // --------------------------------------------------------
+
+    currentIntervalMs:
+      RATE_LEARNING.DEFAULT_INTERVAL_MS,
+
+    fastestKnownSafeMs:
+      RATE_LEARNING.DEFAULT_INTERVAL_MS,
+
+    lastFailedIntervalMs:
+      null,
+
+
+    // --------------------------------------------------------
+    // SUCCESS / FAILURE STATS
+    // --------------------------------------------------------
+
+    consecutiveSuccesses:
+      0,
+
+    totalSuccesses:
+      0,
+
+    rateLimitHits:
+      0,
+
+
+    // --------------------------------------------------------
+    // REQUEST HISTORY
+    // --------------------------------------------------------
+
+    recentRequests:
+      [],
+
+    lastRequestAt:
+      0,
+
+    lastRateLimitAt:
+      null,
+
+
+    // --------------------------------------------------------
+    // INTERNAL STATE
+    // --------------------------------------------------------
+
+    unsavedSuccesses:
+      0,
+
+    createdAt:
+      now(),
+
+    updatedAt:
+      now()
+  };
+}
+
+
+// ============================================================
+// NORMALIZE PROFILE
+// ============================================================
+//
+// Allows us to safely load older/incomplete MongoDB documents.
+// ============================================================
+
+function normalizeRateProfile(
+  profile,
+  defaults
+) {
+
+  const fallback =
+    createDefaultRateProfile(
+      defaults
+    );
+
+
+  return {
+
+    ...fallback,
+
+    ...profile,
+
+
+    currentIntervalMs:
+      clampInterval(
+        profile?.currentIntervalMs ??
+        fallback.currentIntervalMs
+      ),
+
+    fastestKnownSafeMs:
+      clampInterval(
+        profile?.fastestKnownSafeMs ??
+        fallback.fastestKnownSafeMs
+      ),
+
+    recentRequests:
+      Array.isArray(
+        profile?.recentRequests
+      )
+        ? profile.recentRequests
+        : [],
+
+    unsavedSuccesses:
+      0
+  };
+}
+
+
+// ============================================================
+// CLAMP INTERVAL
+// ============================================================
+
+function clampInterval(
+  value
+) {
+
+  const numeric =
+    Number(
+      value
+    );
+
+  if (
+    !Number.isFinite(
+      numeric
+    )
+  ) {
+    return RATE_LEARNING.DEFAULT_INTERVAL_MS;
+  }
+
+
+  return Math.round(
+    Math.max(
+      RATE_LEARNING.MIN_INTERVAL_MS,
+
+      Math.min(
+        RATE_LEARNING.MAX_INTERVAL_MS,
+        numeric
+      )
+    )
+  );
+}
+
+
+// ============================================================
+// PRUNE REQUEST HISTORY
+// ============================================================
+//
+// We only care about recent behavior.
+//
+// Old timestamps are removed so MongoDB does not grow forever.
+// ============================================================
+
+function pruneRateHistory(
+  profile
+) {
+
+  const cutoff =
+    Date.now() -
+    RATE_LEARNING.WINDOW_MS;
+
+
+  profile.recentRequests =
+    profile.recentRequests
+      .map(
+        timestamp =>
+          new Date(
+            timestamp
+          ).getTime()
+      )
+      .filter(
+        timestamp =>
+          Number.isFinite(
+            timestamp
+          ) &&
+          timestamp >= cutoff
+      )
+      .slice(
+        -RATE_LEARNING.MAX_HISTORY
+      );
+}
+
+
+// ============================================================
+// LOAD RATE PROFILE
+// ============================================================
+//
+// MongoDB is checked only when a profile is first needed.
+//
+// Afterwards the profile stays cached in memory.
+// ============================================================
+
+async function getRateProfile({
+  llmUrl,
+  model,
+  apiKey
+}) {
+
+  const profileId =
+    getRateProfileId({
+      llmUrl,
+      model,
+      apiKey
+    });
+
+
+  if (
+    rateProfiles.has(
+      profileId
+    )
+  ) {
+
+    return rateProfiles.get(
+      profileId
+    );
+  }
+
+
+  const db =
+    await getDb();
+
+
+  const collection =
+    db.collection(
+      'llm_rate_profiles'
+    );
+
+
+  const existing =
+    await collection.findOne({
+      _id:
+        profileId
+    });
+
+
+  const profile =
+    normalizeRateProfile(
+      existing,
+      {
+        profileId,
+        llmUrl,
+        model
+      }
+    );
+
+
+  pruneRateHistory(
+    profile
+  );
+
+
+  // Cache immediately.
+  rateProfiles.set(
+    profileId,
+    profile
+  );
+
+
+  // Create MongoDB document if this is a new profile.
+  if (!existing) {
+
+    await collection.insertOne({
+      ...profile,
+
+      updatedAt:
+        now()
+    });
+
+
+    console.log(
+      `[RATE LEARNER] Created profile for ${model}`
+    );
+
+  } else {
+
+    console.log(
+      `[RATE LEARNER] Loaded profile for ${model}: ` +
+      `${profile.currentIntervalMs}ms interval, ` +
+      `${profile.totalSuccesses} successes, ` +
+      `${profile.rateLimitHits} rate limits`
+    );
+  }
+
+
+  return profile;
+}
+
+
+// ============================================================
+// SAVE RATE PROFILE
+// ============================================================
+
+async function saveRateProfile(
+  profile
+) {
+
+  pruneRateHistory(
+    profile
+  );
+
+
+  const db =
+    await getDb();
+
+
+  await db
+    .collection(
+      'llm_rate_profiles'
+    )
+    .updateOne(
+      {
+        _id:
+          profile._id
+      },
+      {
+        $set: {
+
+          llmUrl:
+            profile.llmUrl,
+
+          model:
+            profile.model,
+
+          currentIntervalMs:
+            profile.currentIntervalMs,
+
+          fastestKnownSafeMs:
+            profile.fastestKnownSafeMs,
+
+          lastFailedIntervalMs:
+            profile.lastFailedIntervalMs,
+
+          consecutiveSuccesses:
+            profile.consecutiveSuccesses,
+
+          totalSuccesses:
+            profile.totalSuccesses,
+
+          rateLimitHits:
+            profile.rateLimitHits,
+
+          recentRequests:
+            profile.recentRequests,
+
+          lastRequestAt:
+            profile.lastRequestAt,
+
+          lastRateLimitAt:
+            profile.lastRateLimitAt,
+
+          updatedAt:
+            now()
+        }
+      },
+      {
+        upsert:
+          true
+      }
+    );
+
+
+  profile.unsavedSuccesses =
+    0;
+}
+
+
+// ============================================================
+// WAIT FOR LLM SLOT
+// ============================================================
+//
+// This replaces the old fixed 600ms limiter.
+//
+// Every request:
+//   1. Loads learned profile.
+//   2. Waits according to current learned interval.
+//   3. Records exact request timestamp.
+//   4. Returns the profile for later success/failure learning.
+// ============================================================
+
+function waitForLLMSlot({
+  llmUrl,
+  model,
+  apiKey
+}) {
 
   const next =
     llmThrottle.then(
       async () => {
 
+        const profile =
+          await getRateProfile({
+            llmUrl,
+            model,
+            apiKey
+          });
+
+
+        const lastRequestTime =
+          Number(
+            profile.lastRequestAt ||
+            0
+          );
+
+
         const elapsed =
           Date.now() -
-          lastLLMRequestAt;
+          lastRequestTime;
 
 
         const wait =
           Math.max(
             0,
-            LLM_REQUEST_INTERVAL -
+
+            profile.currentIntervalMs -
             elapsed
           );
 
@@ -586,14 +1129,45 @@ function waitForLLMSlot() {
           wait > 0
         ) {
 
+          console.log(
+            `[RATE LEARNER] Waiting ${wait}ms ` +
+            `(interval ${profile.currentIntervalMs}ms)`
+          );
+
+
           await sleep(
             wait
           );
         }
 
 
-        lastLLMRequestAt =
+        const sentAt =
           Date.now();
+
+
+        profile.lastRequestAt =
+          sentAt;
+
+
+        profile.recentRequests.push(
+          sentAt
+        );
+
+
+        pruneRateHistory(
+          profile
+        );
+
+
+        console.log(
+          `[RATE LEARNER] Sending request | ` +
+          `interval=${profile.currentIntervalMs}ms | ` +
+          `1m=${getRequestsInWindow(profile, 60 * 1000)} | ` +
+          `10m=${profile.recentRequests.length}`
+        );
+
+
+        return profile;
       }
     );
 
@@ -606,6 +1180,227 @@ function waitForLLMSlot() {
 
   return next;
 }
+
+
+// ============================================================
+// COUNT REQUESTS IN WINDOW
+// ============================================================
+
+function getRequestsInWindow(
+  profile,
+  windowMs
+) {
+
+  const cutoff =
+    Date.now() -
+    windowMs;
+
+
+  return profile.recentRequests.filter(
+    timestamp =>
+      Number(
+        timestamp
+      ) >= cutoff
+  ).length;
+}
+
+
+// ============================================================
+// RECORD SUCCESS
+// ============================================================
+//
+// Learning strategy:
+//
+// Every success:
+//   consecutiveSuccesses++
+//
+// Every 50 consecutive successes:
+//   speed up by 3%
+//
+// Example:
+//
+// 1000ms -> 970ms -> 941ms -> 913ms
+// ============================================================
+
+async function recordLLMSuccess(
+  profile
+) {
+
+  if (!profile) {
+    return;
+  }
+
+
+  profile.consecutiveSuccesses +=
+    1;
+
+  profile.totalSuccesses +=
+    1;
+
+  profile.unsavedSuccesses +=
+    1;
+
+
+  // ----------------------------------------------------------
+  // DISCOVER FASTER SAFE ZONE
+  // ----------------------------------------------------------
+
+  if (
+    profile.currentIntervalMs <
+    profile.fastestKnownSafeMs
+  ) {
+
+    profile.fastestKnownSafeMs =
+      profile.currentIntervalMs;
+  }
+
+
+  // ----------------------------------------------------------
+  // CAUTIOUS SPEED INCREASE
+  // ----------------------------------------------------------
+
+  if (
+    profile.consecutiveSuccesses >=
+    RATE_LEARNING.SUCCESS_THRESHOLD
+  ) {
+
+    const previousInterval =
+      profile.currentIntervalMs;
+
+
+    const fasterInterval =
+      clampInterval(
+        previousInterval *
+        RATE_LEARNING.SUCCESS_SPEEDUP_FACTOR
+      );
+
+
+    // Only change if it actually produces a new integer value.
+    if (
+      fasterInterval <
+      previousInterval
+    ) {
+
+      profile.currentIntervalMs =
+        fasterInterval;
+
+
+      console.log(
+        `[RATE LEARNER] ${RATE_LEARNING.SUCCESS_THRESHOLD} successes. ` +
+        `Speeding up: ${previousInterval}ms -> ` +
+        `${fasterInterval}ms`
+      );
+    }
+
+
+    profile.consecutiveSuccesses =
+      0;
+
+
+    // Save immediately when the learned speed changes.
+    await saveRateProfile(
+      profile
+    );
+
+    return;
+  }
+
+
+  // ----------------------------------------------------------
+  // PERIODIC PERSISTENCE
+  // ----------------------------------------------------------
+
+  if (
+    profile.unsavedSuccesses >=
+    RATE_LEARNING.SAVE_EVERY_SUCCESSES
+  ) {
+
+    await saveRateProfile(
+      profile
+    );
+  }
+}
+
+
+// ============================================================
+// RECORD RATE LIMIT
+// ============================================================
+//
+// Learning strategy:
+//
+// Rate limit:
+//   1. Record the interval that failed.
+//   2. Reset consecutive successes.
+//   3. Slow down aggressively.
+//   4. Persist immediately.
+//
+// Example:
+//
+// 600ms -> rate limit
+//
+// New interval:
+//
+// 600 * 1.5 = 900ms
+// ============================================================
+
+async function recordLLMRateLimit(
+  profile,
+  error
+) {
+
+  if (!profile) {
+    return;
+  }
+
+
+  const failedInterval =
+    profile.currentIntervalMs;
+
+
+  const newInterval =
+    clampInterval(
+      failedInterval *
+      RATE_LEARNING.RATE_LIMIT_SLOWDOWN_FACTOR
+    );
+
+
+  profile.lastFailedIntervalMs =
+    failedInterval;
+
+  profile.currentIntervalMs =
+    newInterval;
+
+  profile.consecutiveSuccesses =
+    0;
+
+  profile.rateLimitHits +=
+    1;
+
+  profile.lastRateLimitAt =
+    now();
+
+
+  pruneRateHistory(
+    profile
+  );
+
+
+  console.error(
+    `[RATE LEARNER] RATE LIMIT DETECTED | ` +
+    `failed=${failedInterval}ms | ` +
+    `new=${newInterval}ms | ` +
+    `1m=${getRequestsInWindow(profile, 60 * 1000)} | ` +
+    `10m=${profile.recentRequests.length} | ` +
+    `error=${errorText(error)}`
+  );
+
+
+  // Rate limits are critical learning events.
+  // Persist immediately.
+  await saveRateProfile(
+    profile
+  );
+            }
 
 
 // ============================================================
@@ -1057,6 +1852,14 @@ async function processBatchItem(
 let audit;
 let lastAuditError = null;
 
+
+// The adaptive rate profile used for this request.
+//
+// It is returned by waitForLLMSlot() and then used to teach
+// the learner whether this request succeeded or hit a limit.
+let rateProfile = null;
+
+
 for (
   let attempt = 1;
   attempt <= MAX_EMPTY_AUDIT_ATTEMPTS;
@@ -1065,12 +1868,42 @@ for (
 
   try {
 
-    // Proactive free-tier throttle.
-    await waitForLLMSlot();
+    // --------------------------------------------------------
+    // ADAPTIVE GLOBAL THROTTLE
+    // --------------------------------------------------------
+    //
+    // This:
+    //
+    // 1. Serializes all LLM requests globally.
+    // 2. Uses the learned interval.
+    // 3. Records the request timestamp.
+    // 4. Returns the provider's learned profile.
+    // --------------------------------------------------------
+
+    rateProfile =
+      await waitForLLMSlot({
+        llmUrl:
+          batch.llmUrl,
+
+        model:
+          batch.model,
+
+        apiKey:
+          batch.openaiKey
+      });
+
 
     console.log(
-      `[BATCH ${batch.batchId}] LLM attempt ${attempt}/${MAX_EMPTY_AUDIT_ATTEMPTS} for ${address}`
+      `[BATCH ${batch.batchId}] ` +
+      `LLM attempt ${attempt}/${MAX_EMPTY_AUDIT_ATTEMPTS} ` +
+      `for ${address} ` +
+      `| interval=${rateProfile.currentIntervalMs}ms`
     );
+
+
+    // --------------------------------------------------------
+    // SEND TO LLM
+    // --------------------------------------------------------
 
     audit =
       await runLLMAudit({
@@ -1096,24 +1929,64 @@ for (
           batch.openaiKey
       });
 
+
+    // --------------------------------------------------------
+    // SUCCESS
+    // --------------------------------------------------------
+    //
+    // Teach the adaptive rate controller that this request
+    // succeeded at the current interval.
+    // --------------------------------------------------------
+
+    await recordLLMSuccess(
+      rateProfile
+    );
+
+
     // Success — stop retrying.
     break;
 
+
   } catch (error) {
 
-    // Rate limit / quota should still pause the entire pipeline.
+    // --------------------------------------------------------
+    // RATE LIMIT / QUOTA
+    // --------------------------------------------------------
+    //
+    // Teach the learner BEFORE pausing the pipeline.
+    //
+    // The new slower interval is saved immediately, so when
+    // the user resumes or the server restarts, the system
+    // remembers what it learned.
+    // --------------------------------------------------------
+
     if (
       isPipelineStopError(
         error
       )
     ) {
+
+      await recordLLMRateLimit(
+        rateProfile,
+        error
+      );
+
+
+      // Preserve your existing architecture:
+      //
+      // Throw upward -> worker pauses batch.
       throw error;
     }
+
 
     lastAuditError =
       error;
 
-    // Only retry empty audit responses.
+
+    // --------------------------------------------------------
+    // EMPTY RESPONSE
+    // --------------------------------------------------------
+
     if (
       isEmptyAuditResponseError(
         error
@@ -1126,24 +1999,37 @@ for (
       ) {
 
         console.warn(
-          `[BATCH ${batch.batchId}] Empty audit response for ${address}. Retrying (${attempt}/${MAX_EMPTY_AUDIT_ATTEMPTS})...`
+          `[BATCH ${batch.batchId}] ` +
+          `Empty audit response for ${address}. ` +
+          `Retrying (${attempt}/${MAX_EMPTY_AUDIT_ATTEMPTS})...`
         );
+
 
         continue;
       }
 
+
       console.error(
-        `[BATCH ${batch.batchId}] Empty audit response persisted after ${MAX_EMPTY_AUDIT_ATTEMPTS} attempts for ${address}`
+        `[BATCH ${batch.batchId}] ` +
+        `Empty audit response persisted after ` +
+        `${MAX_EMPTY_AUDIT_ATTEMPTS} attempts for ${address}`
       );
+
 
       break;
     }
 
-    // Any other error should fail immediately.
+
+    // --------------------------------------------------------
+    // OTHER ERROR
+    // --------------------------------------------------------
+    //
+    // Fail immediately.
+    // --------------------------------------------------------
+
     break;
   }
 }
-
 
 // ==========================================================
 // HANDLE FINAL AUDIT FAILURE
