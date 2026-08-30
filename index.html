@@ -297,6 +297,13 @@ button:disabled {
 Persistent smart contract auditing with batch processing,
 automatic checkpoints and restart recovery.
 </p>
+<button
+  id="rateStatusButton"
+  class="rate-status-button"
+>
+  <span id="rateStatusDot"></span>
+  🧠 LLM Rate
+</button>
 
 </header>
 
@@ -1689,6 +1696,37 @@ window.addEventListener(
 
 
 </script>
+
+  <div
+  id="rateDrawer"
+  class="rate-drawer"
+>
+  <div class="rate-drawer-header">
+
+    <div>
+      <h3>🧠 LLM Intelligence</h3>
+      <small id="rateGlobalStatus">
+        Loading...
+      </small>
+    </div>
+
+    <button
+      id="closeRateDrawer"
+      class="rate-close-button"
+    >
+      ✕
+    </button>
+
+  </div>
+
+  <div
+    id="rateDashboardContent"
+    class="rate-dashboard-content"
+  >
+    Loading rate intelligence...
+  </div>
+
+</div>
 
 </body>
 </html>
