@@ -35,6 +35,10 @@ const LLM_REQUEST_INTERVAL =
 const ITEM_DELAY =
   200;
 
+// Maximum number of attempts when the LLM returns an empty response.
+// 3 total attempts = initial attempt + 2 retries.
+const MAX_EMPTY_AUDIT_ATTEMPTS =
+  3;
 
 // ============================================================
 // WORKER STATE
@@ -405,6 +409,23 @@ function errorText(
     error?.message ||
     error ||
     'Unknown error'
+  );
+}
+
+
+function isEmptyAuditResponseError(
+  error
+) {
+
+  const message =
+    errorText(
+      error
+    ).toLowerCase();
+
+  return (
+    message.includes(
+      'llm returned an empty audit response'
+    )
   );
 }
 
