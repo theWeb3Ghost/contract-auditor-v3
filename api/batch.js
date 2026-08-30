@@ -1050,102 +1050,146 @@ async function processBatchItem(
     };
   }
 
+// ==========================================================
+// LLM AUDIT
+// ==========================================================
 
-  // ==========================================================
-  // LLM AUDIT
-  // ==========================================================
+let audit;
+let lastAuditError = null;
 
-  let audit;
-
+for (
+  let attempt = 1;
+  attempt <= MAX_EMPTY_AUDIT_ATTEMPTS;
+  attempt++
+) {
 
   try {
 
     // Proactive free-tier throttle.
     await waitForLLMSlot();
 
-
     console.log(
-      `[BATCH ${batch.batchId}] LLM slot acquired for ${address}`
+      `[BATCH ${batch.batchId}] LLM attempt ${attempt}/${MAX_EMPTY_AUDIT_ATTEMPTS} for ${address}`
     );
 
-
     audit =
-  await runLLMAudit({
-    source: contract.source,
+      await runLLMAudit({
 
-    systemPrompt:
-      batch.systemPrompt,
+        source:
+          contract.source,
 
-    model:
-      batch.model,
+        systemPrompt:
+          batch.systemPrompt,
 
-    contractName:
-      contract.contractName,
+        model:
+          batch.model,
 
-    // The actual contract whose source is being audited
-    address:
-      contract.auditedAddress || address,
+        contractName:
+          contract.contractName,
 
-    llmUrl:
-      batch.llmUrl,
+        address,
 
-    apiKey:
-      batch.openaiKey
-  });
+        llmUrl:
+          batch.llmUrl,
+
+        apiKey:
+          batch.openaiKey
+      });
+
+    // Success — stop retrying.
+    break;
 
   } catch (error) {
 
+    // Rate limit / quota should still pause the entire pipeline.
     if (
       isPipelineStopError(
         error
       )
     ) {
-
       throw error;
     }
 
+    lastAuditError =
+      error;
 
-    // Individual audit error:
-    // mark this address failed and continue.
-    await items.updateOne(
-      {
-        _id:
-          item._id
-      },
-      {
-        $set: {
+    // Only retry empty audit responses.
+    if (
+      isEmptyAuditResponseError(
+        error
+      )
+    ) {
 
-          status:
-            'failed',
+      if (
+        attempt <
+        MAX_EMPTY_AUDIT_ATTEMPTS
+      ) {
 
-          error:
-            errorText(
-              error
-            ),
+        console.warn(
+          `[BATCH ${batch.batchId}] Empty audit response for ${address}. Retrying (${attempt}/${MAX_EMPTY_AUDIT_ATTEMPTS})...`
+        );
 
-          contractName:
-            contract.contractName,
-
-          compilerVersion:
-            contract.compilerVersion,
-
-          implementation:
-            contract.implementation,
-
-          finishedAt:
-            now()
-        }
+        continue;
       }
-    );
 
+      console.error(
+        `[BATCH ${batch.batchId}] Empty audit response persisted after ${MAX_EMPTY_AUDIT_ATTEMPTS} attempts for ${address}`
+      );
 
-    return {
-      status:
-        'failed'
-    };
+      break;
+    }
+
+    // Any other error should fail immediately.
+    break;
   }
+}
 
 
+// ==========================================================
+// HANDLE FINAL AUDIT FAILURE
+// ==========================================================
+
+if (
+  !audit
+) {
+
+  await items.updateOne(
+    {
+      _id:
+        item._id
+    },
+    {
+      $set: {
+
+        status:
+          'failed',
+
+        error:
+          errorText(
+            lastAuditError ||
+            'LLM audit failed'
+          ),
+
+        contractName:
+          contract.contractName,
+
+        compilerVersion:
+          contract.compilerVersion,
+
+        implementation:
+          contract.implementation,
+
+        finishedAt:
+          now()
+      }
+    }
+  );
+
+  return {
+    status:
+      'failed'
+  };
+}
   // ==========================================================
   // SAVE SUCCESS
   // ==========================================================
