@@ -84,11 +84,11 @@ const RATE_LEARNING = {
 
   // Keep request timestamps for this rolling window.
   WINDOW_MS:
-    10 * 60 * 1000,
+    30 * 60 * 1000,
 
   // Hard cap on timestamps stored in memory/database.
   MAX_HISTORY:
-    1000,
+    3000,
 
   // Persist normal learning progress every N successful requests.
   SAVE_EVERY_SUCCESSES:
