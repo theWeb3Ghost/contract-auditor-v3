@@ -25,6 +25,17 @@ const llmDispatcher = new Agent({
 // ============================================================
 // ERROR CLASSIFICATION
 // ============================================================
+//
+// This file ONLY identifies what went wrong.
+//
+// batch.js is responsible for:
+//   - API-key selection
+//   - rate learning
+//   - cooldowns
+//   - failover
+//   - pausing when all keys are unavailable
+//
+// ============================================================
 
 function classifyProviderError(status, text) {
 
@@ -33,7 +44,28 @@ function classifyProviderError(status, text) {
 
 
   // ----------------------------------------------------------
-  // HTTP rate limiting
+  // INVALID / UNAUTHORIZED API KEY
+  // ----------------------------------------------------------
+
+  if (
+    status === 401 ||
+    lower.includes('invalid api key') ||
+    lower.includes('invalid_api_key') ||
+    lower.includes('incorrect api key') ||
+    lower.includes('authentication failed') ||
+    lower.includes('invalid authentication') ||
+    lower.includes('unauthorized')
+  ) {
+
+    return 'INVALID_KEY';
+  }
+
+
+  // ----------------------------------------------------------
+  // RATE LIMIT
+  //
+  // This means the key is temporarily sending too many
+  // requests and should be slowed/cooldowned.
   // ----------------------------------------------------------
 
   if (
@@ -42,38 +74,78 @@ function classifyProviderError(status, text) {
     lower.includes('rate_limit') ||
     lower.includes('too many requests') ||
     lower.includes('requests per second') ||
-    lower.includes('request limit')
+    lower.includes('request limit') ||
+    lower.includes('requests per minute') ||
+    lower.includes('rpm limit') ||
+    lower.includes('tpm limit') ||
+    lower.includes('rate-limit')
   ) {
+
     return 'RATE_LIMIT';
   }
 
 
   // ----------------------------------------------------------
-  // Free quota / account quota exhaustion
+  // QUOTA / CREDITS EXHAUSTED
+  //
+  // This is different from a temporary rate limit.
+  //
+  // batch.js can therefore give this key a much longer
+  // cooldown instead of repeatedly retrying it.
   // ----------------------------------------------------------
 
   if (
     lower.includes('free quota') ||
     lower.includes('free resources') ||
-    lower.includes('only try 10 times') ||
-    lower.includes('only try 10') ||
+    lower.includes('quota exceeded') ||
+    lower.includes('quota has been exceeded') ||
+    lower.includes('insufficient quota') ||
+    lower.includes('quota exhausted') ||
+    lower.includes('quota is exhausted') ||
+    lower.includes('credit balance') ||
+    lower.includes('credits exhausted') ||
+    lower.includes('credits exceeded') ||
+    lower.includes('free credits') ||
     lower.includes('not been recharged') ||
     lower.includes('have not been recharged') ||
     lower.includes('recharged') ||
     lower.includes('recharge') ||
     lower.includes('topup') ||
     lower.includes('top-up') ||
-    lower.includes('quota exceeded') ||
-    lower.includes('quota has been exceeded') ||
-    lower.includes('insufficient quota')
+    lower.includes('billing limit') ||
+    lower.includes('billing quota') ||
+    lower.includes('only try 10 times') ||
+    lower.includes('only try 10')
   ) {
+
     return 'QUOTA';
+  }
+
+
+  // ----------------------------------------------------------
+  // PROVIDER SERVER ERROR
+  //
+  // 5xx errors don't automatically mean the API key is bad.
+  // batch.js should therefore use a short cooldown rather
+  // than permanently disabling the key.
+  // ----------------------------------------------------------
+
+  if (
+    Number(status) >= 500 &&
+    Number(status) <= 599
+  ) {
+
+    return 'PROVIDER_ERROR';
   }
 
 
   return null;
 }
 
+
+// ============================================================
+// CREATE STANDARD PROVIDER ERROR
+// ============================================================
 
 function createProviderError(
   code,
@@ -84,7 +156,8 @@ function createProviderError(
   const error =
     new Error(message);
 
-  error.code = code;
+  error.code =
+    code;
 
   Object.assign(
     error,
@@ -94,6 +167,10 @@ function createProviderError(
   return error;
 }
 
+
+// ============================================================
+// ERROR HELPERS
+// ============================================================
 
 function isRateLimitError(
   status,
@@ -123,6 +200,34 @@ function isQuotaError(
 }
 
 
+function isInvalidKeyError(
+  status,
+  text
+) {
+
+  return (
+    classifyProviderError(
+      status,
+      text
+    ) === 'INVALID_KEY'
+  );
+}
+
+
+function isProviderError(
+  status,
+  text
+) {
+
+  return (
+    classifyProviderError(
+      status,
+      text
+    ) === 'PROVIDER_ERROR'
+  );
+}
+
+
 // ============================================================
 // RUN LLM AUDIT
 // ============================================================
@@ -137,6 +242,10 @@ async function runLLMAudit({
   apiKey
 }) {
 
+  // ----------------------------------------------------------
+  // VALIDATE SOURCE
+  // ----------------------------------------------------------
+
   if (
     !source ||
     typeof source !== 'string'
@@ -148,13 +257,27 @@ async function runLLMAudit({
   }
 
 
+  // ----------------------------------------------------------
+  // VALIDATE API KEY
+  // ----------------------------------------------------------
+
   if (!apiKey) {
 
-    throw new Error(
-      'LLM API key is missing'
-    );
+    const error =
+      new Error(
+        'LLM API key is missing'
+      );
+
+    error.code =
+      'NO_API_KEY';
+
+    throw error;
   }
 
+
+  // ----------------------------------------------------------
+  // SOURCE SIZE LIMIT
+  // ----------------------------------------------------------
 
   let src =
     source;
@@ -179,6 +302,10 @@ async function runLLMAudit({
   }
 
 
+  // ----------------------------------------------------------
+  // ENDPOINT
+  // ----------------------------------------------------------
+
   const endpoint =
     llmUrl &&
     typeof llmUrl === 'string' &&
@@ -189,11 +316,14 @@ async function runLLMAudit({
       : 'https://api.openai.com/v1/chat/completions';
 
 
+  // ----------------------------------------------------------
+  // USER MESSAGE
+  // ----------------------------------------------------------
+
   const userMessage = `
 You are auditing the following Solidity smart contract.
 
 Contract Name: ${contractName || 'Unknown'}
-
 Contract Address: ${address || 'Unknown'}
 
 SOURCE CODE:
@@ -210,9 +340,12 @@ ${
 `;
 
 
+  // ----------------------------------------------------------
+  // REQUEST TIMEOUT
+  // ----------------------------------------------------------
+
   const controller =
     new AbortController();
-
 
   const timeoutId =
     setTimeout(
@@ -225,6 +358,10 @@ ${
 
   let response;
 
+
+  // ==========================================================
+  // SEND REQUEST
+  // ==========================================================
 
   try {
 
@@ -258,28 +395,38 @@ ${
 
           body:
             JSON.stringify({
+
               model:
                 model ||
                 'gpt-4o-mini',
 
               messages: [
+
                 {
                   role: 'system',
+
                   content:
                     systemPrompt
                 },
 
                 {
                   role: 'user',
+
                   content:
                     userMessage
                 }
+
               ]
             })
         }
       );
 
+
   } catch (error) {
+
+    // --------------------------------------------------------
+    // TIMEOUT
+    // --------------------------------------------------------
 
     if (
       error?.name ===
@@ -300,7 +447,26 @@ ${
     }
 
 
-    throw error;
+    // --------------------------------------------------------
+    // NETWORK ERROR
+    //
+    // Don't classify an ordinary network failure as a bad
+    // API key.
+    // --------------------------------------------------------
+
+    const networkError =
+      new Error(
+        `LLM network request failed: ${error?.message || error}`
+      );
+
+    networkError.code =
+      'NETWORK_ERROR';
+
+    networkError.originalError =
+      error;
+
+    throw networkError;
+
 
   } finally {
 
@@ -309,6 +475,10 @@ ${
     );
   }
 
+
+  // ==========================================================
+  // READ RAW RESPONSE
+  // ==========================================================
 
   const rawText =
     await response.text();
@@ -320,7 +490,7 @@ ${
 
 
   // ==========================================================
-  // CLASSIFY PROVIDER RESPONSE BEFORE ACCEPTING IT
+  // CLASSIFY PROVIDER RESPONSE
   // ==========================================================
 
   const providerCode =
@@ -330,14 +500,21 @@ ${
     );
 
 
+  // ==========================================================
+  // RATE LIMIT
+  // ==========================================================
+
   if (
     providerCode ===
     'RATE_LIMIT'
   ) {
 
     throw createProviderError(
+
       'RATE_LIMIT',
+
       `LLM provider rate limit: ${rawText.slice(0, 1000)}`,
+
       {
         httpStatus:
           response.status,
@@ -345,9 +522,14 @@ ${
         responseText:
           rawText
       }
+
     );
   }
 
+
+  // ==========================================================
+  // QUOTA
+  // ==========================================================
 
   if (
     providerCode ===
@@ -355,8 +537,11 @@ ${
   ) {
 
     throw createProviderError(
+
       'QUOTA',
+
       `LLM provider quota exhausted: ${rawText.slice(0, 1000)}`,
+
       {
         httpStatus:
           response.status,
@@ -364,12 +549,67 @@ ${
         responseText:
           rawText
       }
+
     );
   }
 
 
   // ==========================================================
-  // HTTP ERRORS
+  // INVALID API KEY
+  // ==========================================================
+
+  if (
+    providerCode ===
+    'INVALID_KEY'
+  ) {
+
+    throw createProviderError(
+
+      'INVALID_KEY',
+
+      `LLM API key rejected: ${rawText.slice(0, 1000)}`,
+
+      {
+        httpStatus:
+          response.status,
+
+        responseText:
+          rawText
+      }
+
+    );
+  }
+
+
+  // ==========================================================
+  // PROVIDER SERVER ERROR
+  // ==========================================================
+
+  if (
+    providerCode ===
+    'PROVIDER_ERROR'
+  ) {
+
+    throw createProviderError(
+
+      'PROVIDER_ERROR',
+
+      `LLM provider server error (${response.status}): ${rawText.slice(0, 1000)}`,
+
+      {
+        httpStatus:
+          response.status,
+
+        responseText:
+          rawText
+      }
+
+    );
+  }
+
+
+  // ==========================================================
+  // OTHER HTTP ERRORS
   // ==========================================================
 
   if (
@@ -387,28 +627,20 @@ ${
     error.responseText =
       rawText;
 
-
-    if (
-      isRateLimitError(
+    // Run the classifier again as a final safety net.
+    const classified =
+      classifyProviderError(
         response.status,
         rawText
-      )
-    ) {
+      );
 
+    if (classified) {
       error.code =
-        'RATE_LIMIT';
-
-    } else if (
-      isQuotaError(
-        response.status,
-        rawText
-      )
-    ) {
-
+        classified;
+    } else {
       error.code =
-        'QUOTA';
+        'HTTP_ERROR';
     }
-
 
     throw error;
   }
@@ -437,6 +669,12 @@ ${
 
     error.code =
       'INVALID_RESPONSE';
+
+    error.httpStatus =
+      response.status;
+
+    error.responseText =
+      rawText;
 
     throw error;
   }
@@ -473,10 +711,8 @@ ${
     error.apiError =
       json.error;
 
-
     error.httpStatus =
       response.status;
-
 
     error.responseText =
       rawText;
@@ -488,6 +724,11 @@ ${
 
       error.code =
         providerCode;
+
+    } else {
+
+      error.code =
+        'PROVIDER_ERROR';
     }
 
 
@@ -505,6 +746,10 @@ ${
     json?.output_text ||
     '';
 
+
+  // ==========================================================
+  // EMPTY RESPONSE
+  // ==========================================================
 
   if (
     !result ||
@@ -526,8 +771,11 @@ ${
   // ==========================================================
   // FINAL SAFETY CHECK
   //
-  // Prevent provider quota/rate-limit messages from ever
-  // becoming a "completed audit".
+  // Some providers can technically return HTTP 200 while
+  // placing an error/rate-limit/quota message inside the
+  // response body.
+  //
+  // Never allow that to become a completed audit.
   // ==========================================================
 
   const resultProviderCode =
@@ -543,11 +791,14 @@ ${
   ) {
 
     throw createProviderError(
+
       'RATE_LIMIT',
+
       String(result).slice(
         0,
         2000
       ),
+
       {
         httpStatus:
           response.status,
@@ -555,6 +806,7 @@ ${
         responseText:
           rawText
       }
+
     );
   }
 
@@ -565,11 +817,14 @@ ${
   ) {
 
     throw createProviderError(
+
       'QUOTA',
+
       String(result).slice(
         0,
         2000
       ),
+
       {
         httpStatus:
           response.status,
@@ -577,11 +832,43 @@ ${
         responseText:
           rawText
       }
+
     );
   }
 
 
+  if (
+    resultProviderCode ===
+    'INVALID_KEY'
+  ) {
+
+    throw createProviderError(
+
+      'INVALID_KEY',
+
+      String(result).slice(
+        0,
+        2000
+      ),
+
+      {
+        httpStatus:
+          response.status,
+
+        responseText:
+          rawText
+      }
+
+    );
+  }
+
+
+  // ==========================================================
+  // SUCCESS
+  // ==========================================================
+
   return {
+
     result:
       String(result).trim(),
 
@@ -595,7 +882,16 @@ ${
 // ============================================================
 
 module.exports = {
+
   runLLMAudit,
+
+  classifyProviderError,
+
   isRateLimitError,
-  isQuotaError
+
+  isQuotaError,
+
+  isInvalidKeyError,
+
+  isProviderError
 };
