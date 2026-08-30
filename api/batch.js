@@ -95,6 +95,92 @@ const RATE_LEARNING = {
     10
 };
 
+// ============================================================
+// API KEY POOL
+// ============================================================
+//
+// Multiple keys can be configured.
+//
+// Example:
+//
+// LLM_API_KEYS=key1,key2,key3
+//
+// Each key gets:
+//   - Independent rate learning
+//   - Independent cooldown
+//   - Independent quota state
+//   - Independent health tracking
+//
+// Raw keys are NEVER returned through the API.
+// ============================================================
+
+const KEY_POOL = {
+
+  // Temporary 429 cooldown.
+  RATE_LIMIT_COOLDOWN_MS:
+    2 * 60 * 1000,
+
+  // Quota failures usually last longer than ordinary rate limits.
+  QUOTA_COOLDOWN_MS:
+    60 * 60 * 1000,
+
+  // Provider/server failures get a short cooldown.
+  PROVIDER_ERROR_COOLDOWN_MS:
+    30 * 1000,
+
+  // Invalid credentials stay disabled until server restart/config change.
+  INVALID_KEY_COOLDOWN_MS:
+    24 * 60 * 60 * 1000
+};
+
+
+function getConfiguredLLMKeys(batch) {
+
+  const keys = [];
+
+  // Preferred: multiple environment keys.
+  if (process.env.LLM_API_KEYS) {
+
+    for (
+      const key of process.env.LLM_API_KEYS.split(',')
+    ) {
+
+      const cleaned =
+        String(key || '').trim();
+
+      if (cleaned) {
+        keys.push(cleaned);
+      }
+    }
+  }
+
+  // Backwards compatibility with existing batch configuration.
+  if (
+    batch?.openaiKey &&
+    String(batch.openaiKey).trim()
+  ) {
+
+    keys.push(
+      String(batch.openaiKey).trim()
+    );
+  }
+
+  // Remove duplicates.
+  return [
+    ...new Set(keys)
+  ];
+}
+
+
+function getKeyFingerprint(apiKey) {
+
+  return crypto
+    .createHash('sha256')
+    .update(String(apiKey || ''))
+    .digest('hex')
+    .slice(-12);
+}
+
 // How long to wait between completed contracts.
 const ITEM_DELAY =
   200;
@@ -650,7 +736,7 @@ let llmThrottle =
 
 function getRateProfileId({
   llmUrl,
-  model,
+  model, 
   apiKey
 }) {
 
@@ -691,7 +777,8 @@ function getRateProfileId({
 function createDefaultRateProfile({
   profileId,
   llmUrl,
-  model
+  model, 
+  apiKey
 }) {
 
   return {
@@ -749,6 +836,36 @@ function createDefaultRateProfile({
     lastRateLimitAt:
       null,
 
+    // --------------------------------------------------------
+// KEY POOL STATE
+// --------------------------------------------------------
+
+keyFingerprint:
+  getKeyFingerprint(apiKey),
+
+keyStatus:
+  'available',
+
+cooldownUntil:
+  null,
+
+lastErrorCode:
+  null,
+
+lastErrorAt:
+  null,
+
+quotaHits:
+  0,
+
+invalidKeyHits:
+  0,
+
+providerErrorHits:
+  0,
+
+lastUsedAt:
+  null,
 
     // --------------------------------------------------------
     // INTERNAL STATE
@@ -1023,6 +1140,32 @@ async function saveRateProfile(
       },
       {
         $set: {
+          keyFingerprint:
+  profile.keyFingerprint,
+
+keyStatus:
+  profile.keyStatus,
+
+cooldownUntil:
+  profile.cooldownUntil,
+
+lastErrorCode:
+  profile.lastErrorCode,
+
+lastErrorAt:
+  profile.lastErrorAt,
+
+quotaHits:
+  profile.quotaHits,
+
+invalidKeyHits:
+  profile.invalidKeyHits,
+
+providerErrorHits:
+  profile.providerErrorHits,
+
+lastUsedAt:
+  profile.lastUsedAt,
 
           llmUrl:
             profile.llmUrl,
@@ -1071,7 +1214,219 @@ async function saveRateProfile(
   profile.unsavedSuccesses =
     0;
 }
+// ============================================================
+// KEY POOL STATUS
+// ============================================================
 
+function isKeyAvailable(profile) {
+
+  if (!profile) {
+    return false;
+  }
+
+  if (
+    profile.keyStatus === 'disabled'
+  ) {
+    return false;
+  }
+
+  const cooldownUntil =
+    profile.cooldownUntil
+      ? new Date(
+          profile.cooldownUntil
+        ).getTime()
+      : 0;
+
+  if (
+    cooldownUntil &&
+    cooldownUntil > Date.now()
+  ) {
+    return false;
+  }
+
+  // Automatically recover expired cooldowns.
+  if (
+    cooldownUntil &&
+    cooldownUntil <= Date.now() &&
+    profile.keyStatus === 'cooldown'
+  ) {
+
+    profile.keyStatus =
+      'available';
+
+    profile.cooldownUntil =
+      null;
+  }
+
+  return true;
+}
+
+
+function getKeyCooldownRemaining(profile) {
+
+  if (
+    !profile?.cooldownUntil
+  ) {
+    return 0;
+  }
+
+  return Math.max(
+    0,
+    new Date(
+      profile.cooldownUntil
+    ).getTime() -
+    Date.now()
+  );
+}
+
+
+function getKeyScore(profile) {
+
+  if (!isKeyAvailable(profile)) {
+    return -Infinity;
+  }
+
+  let score =
+    100000;
+
+  // Faster learned interval = better.
+  score -=
+    profile.currentIntervalMs * 10;
+
+  // Recent rate limits reduce preference.
+  score -=
+    profile.rateLimitHits * 500;
+
+  // Consecutive successful requests increase confidence.
+  score +=
+    Math.min(
+      profile.consecutiveSuccesses,
+      RATE_LEARNING.SUCCESS_THRESHOLD
+    ) * 20;
+
+  // Recently successful keys get a small preference.
+  if (
+    profile.lastUsedAt &&
+    Date.now() -
+    new Date(profile.lastUsedAt).getTime()
+      < 5 * 60 * 1000
+  ) {
+    score += 100;
+  }
+
+  return score;
+}
+
+
+// ============================================================
+// SELECT BEST API KEY
+// ============================================================
+
+async function selectBestLLMKey({
+  batch
+}) {
+
+  const keys =
+    getConfiguredLLMKeys(batch);
+
+  if (!keys.length) {
+
+    const error =
+      new Error(
+        'No LLM API keys configured'
+      );
+
+    error.code =
+      'NO_API_KEYS';
+
+    throw error;
+  }
+
+  const candidates =
+    [];
+
+  for (
+    const apiKey of keys
+  ) {
+
+    const profile =
+      await getRateProfile({
+        llmUrl:
+          batch.llmUrl,
+
+        model:
+          batch.model,
+
+        apiKey
+      });
+
+    profile.keyFingerprint =
+      getKeyFingerprint(apiKey);
+
+    candidates.push({
+      apiKey,
+      profile
+    });
+  }
+
+  const available =
+    candidates.filter(
+      candidate =>
+        isKeyAvailable(
+          candidate.profile
+        )
+    );
+
+  if (!available.length) {
+
+    const earliestRecovery =
+      candidates
+        .map(
+          candidate =>
+            getKeyCooldownRemaining(
+              candidate.profile
+            )
+        )
+        .filter(Boolean)
+        .sort(
+          (a, b) => a - b
+        )[0] || null;
+
+    const error =
+      new Error(
+        'All configured LLM API keys are unavailable'
+      );
+
+    error.code =
+      'ALL_KEYS_UNAVAILABLE';
+
+    error.retryAfterMs =
+      earliestRecovery;
+
+    throw error;
+  }
+
+  available.sort(
+    (a, b) =>
+      getKeyScore(
+        b.profile
+      ) -
+      getKeyScore(
+        a.profile
+      )
+  );
+
+  const selected =
+    available[0];
+
+  selected.profile.keyStatus =
+    'active';
+
+  selected.profile.lastUsedAt =
+    now();
+
+  return selected;
+}
 
 // ============================================================
 // WAIT FOR LLM SLOT
@@ -1087,100 +1442,89 @@ async function saveRateProfile(
 // ============================================================
 
 function waitForLLMSlot({
-  llmUrl,
-  model,
-  apiKey
+  batch
 }) {
 
   const next =
     llmThrottle.then(
       async () => {
 
-        const profile =
-          await getRateProfile({
-            llmUrl,
-            model,
-            apiKey
+        const selected =
+          await selectBestLLMKey({
+            batch
           });
 
+        const {
+          apiKey,
+          profile
+        } =
+          selected;
 
         const lastRequestTime =
           Number(
-            profile.lastRequestAt ||
-            0
+            profile.lastRequestAt || 0
           );
-
 
         const elapsed =
           Date.now() -
           lastRequestTime;
 
-
         const wait =
           Math.max(
             0,
-
             profile.currentIntervalMs -
             elapsed
           );
 
-
-        if (
-          wait > 0
-        ) {
+        if (wait > 0) {
 
           console.log(
-            `[RATE LEARNER] Waiting ${wait}ms ` +
+            `[RATE LEARNER] Key ${profile.keyFingerprint} ` +
+            `waiting ${wait}ms ` +
             `(interval ${profile.currentIntervalMs}ms)`
           );
 
-
-          await sleep(
-            wait
-          );
+          await sleep(wait);
         }
-
 
         const sentAt =
           Date.now();
 
-
         profile.lastRequestAt =
           sentAt;
 
+        profile.lastUsedAt =
+          now();
 
         profile.recentRequests.push(
           sentAt
         );
 
-
         pruneRateHistory(
           profile
         );
 
-
         console.log(
-          `[RATE LEARNER] Sending request | ` +
+          `[RATE LEARNER] key=${profile.keyFingerprint} | ` +
           `interval=${profile.currentIntervalMs}ms | ` +
           `1m=${getRequestsInWindow(profile, 60 * 1000)} | ` +
-          `10m=${profile.recentRequests.length}`
+          `30m=${profile.recentRequests.length}`
         );
 
-
-        return profile;
+        return {
+          apiKey,
+          profile
+        };
       }
     );
-
 
   llmThrottle =
     next.catch(
       () => {}
     );
 
-
   return next;
 }
-
 
 // ============================================================
 // COUNT REQUESTS IN WINDOW
@@ -1240,7 +1584,221 @@ async function recordLLMSuccess(
   profile.unsavedSuccesses +=
     1;
 
+// ============================================================
+// KEY POOL STATUS
+// ============================================================
 
+function isKeyAvailable(profile) {
+
+  if (!profile) {
+    return false;
+  }
+
+  if (
+    profile.keyStatus === 'disabled'
+  ) {
+    return false;
+  }
+
+  const cooldownUntil =
+    profile.cooldownUntil
+      ? new Date(
+          profile.cooldownUntil
+        ).getTime()
+      : 0;
+
+  if (
+    cooldownUntil &&
+    cooldownUntil > Date.now()
+  ) {
+    return false;
+  }
+
+  // Automatically recover expired cooldowns.
+  if (
+    cooldownUntil &&
+    cooldownUntil <= Date.now() &&
+    profile.keyStatus === 'cooldown'
+  ) {
+
+    profile.keyStatus =
+      'available';
+
+    profile.cooldownUntil =
+      null;
+  }
+
+  return true;
+}
+
+
+function getKeyCooldownRemaining(profile) {
+
+  if (
+    !profile?.cooldownUntil
+  ) {
+    return 0;
+  }
+
+  return Math.max(
+    0,
+    new Date(
+      profile.cooldownUntil
+    ).getTime() -
+    Date.now()
+  );
+}
+
+
+function getKeyScore(profile) {
+
+  if (!isKeyAvailable(profile)) {
+    return -Infinity;
+  }
+
+  let score =
+    100000;
+
+  // Faster learned interval = better.
+  score -=
+    profile.currentIntervalMs * 10;
+
+  // Recent rate limits reduce preference.
+  score -=
+    profile.rateLimitHits * 500;
+
+  // Consecutive successful requests increase confidence.
+  score +=
+    Math.min(
+      profile.consecutiveSuccesses,
+      RATE_LEARNING.SUCCESS_THRESHOLD
+    ) * 20;
+
+  // Recently successful keys get a small preference.
+  if (
+    profile.lastUsedAt &&
+    Date.now() -
+    new Date(profile.lastUsedAt).getTime()
+      < 5 * 60 * 1000
+  ) {
+    score += 100;
+  }
+
+  return score;
+}
+
+
+// ============================================================
+// SELECT BEST API KEY
+// ============================================================
+
+async function selectBestLLMKey({
+  batch
+}) {
+
+  const keys =
+    getConfiguredLLMKeys(batch);
+
+  if (!keys.length) {
+
+    const error =
+      new Error(
+        'No LLM API keys configured'
+      );
+
+    error.code =
+      'NO_API_KEYS';
+
+    throw error;
+  }
+
+  const candidates =
+    [];
+
+  for (
+    const apiKey of keys
+  ) {
+
+    const profile =
+      await getRateProfile({
+        llmUrl:
+          batch.llmUrl,
+
+        model:
+          batch.model,
+
+        apiKey
+      });
+
+    profile.keyFingerprint =
+      getKeyFingerprint(apiKey);
+
+    candidates.push({
+      apiKey,
+      profile
+    });
+  }
+
+  const available =
+    candidates.filter(
+      candidate =>
+        isKeyAvailable(
+          candidate.profile
+        )
+    );
+
+  if (!available.length) {
+
+    const earliestRecovery =
+      candidates
+        .map(
+          candidate =>
+            getKeyCooldownRemaining(
+              candidate.profile
+            )
+        )
+        .filter(Boolean)
+        .sort(
+          (a, b) => a - b
+        )[0] || null;
+
+    const error =
+      new Error(
+        'All configured LLM API keys are unavailable'
+      );
+
+    error.code =
+      'ALL_KEYS_UNAVAILABLE';
+
+    error.retryAfterMs =
+      earliestRecovery;
+
+    throw error;
+  }
+
+  available.sort(
+    (a, b) =>
+      getKeyScore(
+        b.profile
+      ) -
+      getKeyScore(
+        a.profile
+      )
+  );
+
+  const selected =
+    available[0];
+
+  selected.profile.keyStatus =
+    'active';
+
+  selected.profile.lastUsedAt =
+    now();
+
+  return selected;
+}
+
+  
   // ----------------------------------------------------------
   // DISCOVER FASTER SAFE ZONE
   // ----------------------------------------------------------
@@ -1401,6 +1959,110 @@ async function recordLLMRateLimit(
     profile
   );
             }
+
+
+// ============================================================
+// RECORD KEY FAILURE
+// ============================================================
+
+async function recordKeyFailure(
+  profile,
+  error
+) {
+
+  if (!profile) {
+    return;
+  }
+
+  const code =
+    String(
+      error?.code || ''
+    ).toUpperCase();
+
+  profile.lastErrorCode =
+    code || 'UNKNOWN';
+
+  profile.lastErrorAt =
+    now();
+
+  if (
+    code === 'RATE_LIMIT'
+  ) {
+
+    await recordLLMRateLimit(
+      profile,
+      error
+    );
+
+    profile.keyStatus =
+      'cooldown';
+
+    profile.cooldownUntil =
+      new Date(
+        Date.now() +
+        KEY_POOL.RATE_LIMIT_COOLDOWN_MS
+      );
+
+  } else if (
+    code === 'QUOTA'
+  ) {
+
+    profile.quotaHits =
+      (profile.quotaHits || 0) + 1;
+
+    profile.keyStatus =
+      'cooldown';
+
+    profile.cooldownUntil =
+      new Date(
+        Date.now() +
+        KEY_POOL.QUOTA_COOLDOWN_MS
+      );
+
+  } else if (
+    code === 'INVALID_KEY'
+  ) {
+
+    profile.invalidKeyHits =
+      (profile.invalidKeyHits || 0) + 1;
+
+    profile.keyStatus =
+      'disabled';
+
+    profile.cooldownUntil =
+      new Date(
+        Date.now() +
+        KEY_POOL.INVALID_KEY_COOLDOWN_MS
+      );
+
+  } else if (
+    code === 'PROVIDER_ERROR'
+  ) {
+
+    profile.providerErrorHits =
+      (profile.providerErrorHits || 0) + 1;
+
+    profile.keyStatus =
+      'cooldown';
+
+    profile.cooldownUntil =
+      new Date(
+        Date.now() +
+        KEY_POOL.PROVIDER_ERROR_COOLDOWN_MS
+      );
+  }
+
+  await saveRateProfile(
+    profile
+  );
+
+  console.warn(
+    `[KEY POOL] ${profile.keyFingerprint} ` +
+    `status=${profile.keyStatus} ` +
+    `reason=${code} ` +
+    `cooldown=${profile.cooldownUntil || 'none'}`
+  );
+}
 
 
 // ============================================================
@@ -1859,51 +2521,67 @@ let lastAuditError = null;
 // the learner whether this request succeeded or hit a limit.
 let rateProfile = null;
 
+let audit;
+let lastAuditError = null;
+let attemptedKeys = new Set();
+
+const maxKeyAttempts =
+  Math.max(
+    1,
+    getConfiguredLLMKeys(batch).length
+  );
 
 for (
   let attempt = 1;
-  attempt <= MAX_EMPTY_AUDIT_ATTEMPTS;
+  attempt <= maxKeyAttempts;
   attempt++
 ) {
 
+  let rateProfile = null;
+  let selectedApiKey = null;
+
   try {
 
-    // --------------------------------------------------------
-    // ADAPTIVE GLOBAL THROTTLE
-    // --------------------------------------------------------
-    //
-    // This:
-    //
-    // 1. Serializes all LLM requests globally.
-    // 2. Uses the learned interval.
-    // 3. Records the request timestamp.
-    // 4. Returns the provider's learned profile.
-    // --------------------------------------------------------
-
-    rateProfile =
+    const slot =
       await waitForLLMSlot({
-        llmUrl:
-          batch.llmUrl,
-
-        model:
-          batch.model,
-
-        apiKey:
-          batch.openaiKey
+        batch
       });
 
+    rateProfile =
+      slot.profile;
+
+    selectedApiKey =
+      slot.apiKey;
+
+    // Prevent repeatedly selecting a key that
+    // already failed during this same contract audit.
+    if (
+      attemptedKeys.has(
+        rateProfile.keyFingerprint
+      )
+    ) {
+
+      rateProfile.keyStatus =
+        'cooldown';
+
+      rateProfile.cooldownUntil =
+        new Date(
+          Date.now() + 1000
+        );
+
+      continue;
+    }
+
+    attemptedKeys.add(
+      rateProfile.keyFingerprint
+    );
 
     console.log(
       `[BATCH ${batch.batchId}] ` +
-      `LLM attempt ${attempt}/${MAX_EMPTY_AUDIT_ATTEMPTS} ` +
-      `for ${address} ` +
-      `| interval=${rateProfile.currentIntervalMs}ms`
+      `LLM key=${rateProfile.keyFingerprint} ` +
+      `attempt ${attempt}/${maxKeyAttempts} ` +
+      `interval=${rateProfile.currentIntervalMs}ms`
     );
-
-
-    // --------------------------------------------------------
-    // SEND TO LLM
-    // --------------------------------------------------------
 
     audit =
       await runLLMAudit({
@@ -1926,110 +2604,104 @@ for (
           batch.llmUrl,
 
         apiKey:
-          batch.openaiKey
+          selectedApiKey
       });
-
-
-    // --------------------------------------------------------
-    // SUCCESS
-    // --------------------------------------------------------
-    //
-    // Teach the adaptive rate controller that this request
-    // succeeded at the current interval.
-    // --------------------------------------------------------
 
     await recordLLMSuccess(
       rateProfile
     );
 
+    rateProfile.keyStatus =
+      'available';
 
-    // Success — stop retrying.
+    await saveRateProfile(
+      rateProfile
+    );
+
     break;
 
-
   } catch (error) {
-
-    // --------------------------------------------------------
-    // RATE LIMIT / QUOTA
-    // --------------------------------------------------------
-    //
-    // Teach the learner BEFORE pausing the pipeline.
-    //
-    // The new slower interval is saved immediately, so when
-    // the user resumes or the server restarts, the system
-    // remembers what it learned.
-    // --------------------------------------------------------
-
-    if (
-      isPipelineStopError(
-        error
-      )
-    ) {
-
-      await recordLLMRateLimit(
-        rateProfile,
-        error
-      );
-
-
-      // Preserve your existing architecture:
-      //
-      // Throw upward -> worker pauses batch.
-      throw error;
-    }
-
 
     lastAuditError =
       error;
 
+    const code =
+      String(
+        error?.code || ''
+      ).toUpperCase();
 
-    // --------------------------------------------------------
-    // EMPTY RESPONSE
-    // --------------------------------------------------------
+    console.warn(
+      `[KEY POOL] Request failed | ` +
+      `code=${code} | ` +
+      `key=${rateProfile?.keyFingerprint || 'unknown'}`
+    );
 
     if (
-      isEmptyAuditResponseError(
-        error
-      )
+      [
+        'RATE_LIMIT',
+        'QUOTA',
+        'INVALID_KEY',
+        'PROVIDER_ERROR'
+      ].includes(code)
     ) {
 
-      if (
-        attempt <
-        MAX_EMPTY_AUDIT_ATTEMPTS
-      ) {
-
-        console.warn(
-          `[BATCH ${batch.batchId}] ` +
-          `Empty audit response for ${address}. ` +
-          `Retrying (${attempt}/${MAX_EMPTY_AUDIT_ATTEMPTS})...`
-        );
-
-
-        continue;
-      }
-
-
-      console.error(
-        `[BATCH ${batch.batchId}] ` +
-        `Empty audit response persisted after ` +
-        `${MAX_EMPTY_AUDIT_ATTEMPTS} attempts for ${address}`
+      await recordKeyFailure(
+        rateProfile,
+        error
       );
 
-
-      break;
+      // Try another key.
+      continue;
     }
 
+    if (
+      isEmptyAuditResponseError(error) &&
+      attempt < maxKeyAttempts
+    ) {
 
-    // --------------------------------------------------------
-    // OTHER ERROR
-    // --------------------------------------------------------
-    //
-    // Fail immediately.
-    // --------------------------------------------------------
+      continue;
+    }
 
     break;
   }
 }
+
+
+// ==========================================================
+// ALL KEYS FAILED
+// ==========================================================
+
+if (!audit) {
+
+  if (
+    lastAuditError?.code ===
+    'ALL_KEYS_UNAVAILABLE'
+  ) {
+
+    throw lastAuditError;
+  }
+
+  const allKeys =
+    getConfiguredLLMKeys(batch);
+
+  if (
+    attemptedKeys.size >=
+    allKeys.length
+  ) {
+
+    const error =
+      new Error(
+        'All LLM API keys failed or entered cooldown'
+      );
+
+    error.code =
+      'ALL_KEYS_UNAVAILABLE';
+
+    throw error;
+  }
+}
+
+    
 
 // ==========================================================
 // HANDLE FINAL AUDIT FAILURE
@@ -3736,6 +4408,266 @@ async function resumePendingBatches() {
   }
 }
 
+// ============================================================
+// LLM RATE INTELLIGENCE STATUS
+// ============================================================
+
+async function getLLMRateStatus(
+  req,
+  res
+) {
+
+  try {
+
+    const db =
+      await getDb();
+
+    const profiles =
+      await db
+        .collection(
+          'llm_rate_profiles'
+        )
+        .find({})
+        .sort({
+          updatedAt: -1
+        })
+        .toArray();
+
+    const normalized =
+      profiles.map(
+        raw => {
+
+          const profile =
+            normalizeRateProfile(
+              raw,
+              {
+                profileId:
+                  raw._id,
+
+                llmUrl:
+                  raw.llmUrl,
+
+                model:
+                  raw.model,
+
+                apiKey:
+                  ''
+              }
+            );
+
+          pruneRateHistory(
+            profile
+          );
+
+          const cooldownRemaining =
+            getKeyCooldownRemaining(
+              profile
+            );
+
+          let status =
+            profile.keyStatus ||
+            'available';
+
+          if (
+            status === 'cooldown' &&
+            cooldownRemaining <= 0
+          ) {
+            status =
+              'available';
+          }
+
+          let activity =
+            'stable';
+
+          let nextAction =
+            'Maintain current interval';
+
+          if (
+            status === 'cooldown'
+          ) {
+
+            activity =
+              'recovering';
+
+            nextAction =
+              'Waiting for cooldown';
+
+          } else if (
+            status === 'disabled'
+          ) {
+
+            activity =
+              'disabled';
+
+            nextAction =
+              'Replace invalid key';
+
+          } else if (
+            profile.consecutiveSuccesses > 0 &&
+            profile.consecutiveSuccesses <
+            RATE_LEARNING.SUCCESS_THRESHOLD
+          ) {
+
+            activity =
+              'learning';
+
+            nextAction =
+              'Collect more successful requests';
+
+          } else if (
+            profile.consecutiveSuccesses >=
+            RATE_LEARNING.SUCCESS_THRESHOLD - 5
+          ) {
+
+            activity =
+              'approaching_speedup';
+
+            nextAction =
+              'Preparing to test faster interval';
+          }
+
+          return {
+
+            keyId:
+              profile.keyFingerprint ||
+              String(profile._id).slice(-12),
+
+            status,
+
+            activity,
+
+            nextAction,
+
+            currentIntervalMs:
+              profile.currentIntervalMs,
+
+            requestsPerSecond:
+              Number(
+                (
+                  1000 /
+                  profile.currentIntervalMs
+                ).toFixed(2)
+              ),
+
+            fastestKnownSafeMs:
+              profile.fastestKnownSafeMs,
+
+            lastFailedIntervalMs:
+              profile.lastFailedIntervalMs,
+
+            consecutiveSuccesses:
+              profile.consecutiveSuccesses,
+
+            successThreshold:
+              RATE_LEARNING.SUCCESS_THRESHOLD,
+
+            successesUntilSpeedup:
+              Math.max(
+                0,
+                RATE_LEARNING.SUCCESS_THRESHOLD -
+                profile.consecutiveSuccesses
+              ),
+
+            totalSuccesses:
+              profile.totalSuccesses,
+
+            rateLimitHits:
+              profile.rateLimitHits,
+
+            quotaHits:
+              profile.quotaHits || 0,
+
+            providerErrorHits:
+              profile.providerErrorHits || 0,
+
+            requestsLastMinute:
+              getRequestsInWindow(
+                profile,
+                60 * 1000
+              ),
+
+            requestsLast30Minutes:
+              getRequestsInWindow(
+                profile,
+                30 * 60 * 1000
+              ),
+
+            cooldownRemainingMs:
+              cooldownRemaining,
+
+            lastRequestAt:
+              profile.lastRequestAt || null,
+
+            lastRateLimitAt:
+              profile.lastRateLimitAt || null,
+
+            lastErrorCode:
+              profile.lastErrorCode || null
+          };
+        }
+      );
+
+    const availableKeys =
+      normalized.filter(
+        key =>
+          key.status === 'available' ||
+          key.status === 'active'
+      ).length;
+
+    const coolingKeys =
+      normalized.filter(
+        key =>
+          key.status === 'cooldown'
+      ).length;
+
+    const disabledKeys =
+      normalized.filter(
+        key =>
+          key.status === 'disabled'
+      ).length;
+
+    return res.json({
+
+      ok: true,
+
+      updatedAt:
+        now(),
+
+      global: {
+
+        queueActive:
+          activeWorkers.size > 0,
+
+        activeWorkers:
+          activeWorkers.size,
+
+        totalKeys:
+          normalized.length,
+
+        availableKeys,
+
+        coolingKeys,
+
+        disabledKeys,
+
+        telemetryWindowMinutes:
+          30
+      },
+
+      keys:
+        normalized
+    });
+
+  } catch (error) {
+
+    return res
+      .status(500)
+      .json({
+        error:
+          errorText(error)
+      });
+  }
+}
 
 // ============================================================
 // EXPRESS ROUTER
@@ -3749,7 +4681,10 @@ router.post(
   '/',
   createBatch
 );
-
+router.get(
+  '/llm-rate-status',
+  getLLMRateStatus
+);
 
 router.get(
   '/:batchId',
