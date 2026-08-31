@@ -2,7 +2,7 @@
 
 const { fetch, Agent } = require('undici');
 
-const MAX_CHARS = 60000;
+const MAX_CHARS = 300000;
 
 // Keep the long timeout because some audits can take several minutes.
 const LLM_TIMEOUT = 10 * 60 * 1000;
