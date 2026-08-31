@@ -896,6 +896,56 @@ Resume
   </div>
 
   <div
+    <div
+  style="
+    display:flex;
+    flex-wrap:wrap;
+    gap:8px;
+    margin-bottom:14px
+  "
+>
+
+  <button
+    id="softRateResetButton"
+    type="button"
+  >
+    Soft Reset
+  </button>
+
+  <button
+    id="learningRateResetButton"
+    type="button"
+  >
+    Reset Learning
+  </button>
+
+  <button
+    id="hardRateResetButton"
+    type="button"
+    style="
+      border-color:#ef4444
+    "
+  >
+    Hard Reset
+  </button>
+
+  <button
+    id="cleanupRateProfilesButton"
+    type="button"
+  >
+    Clean Stale Profiles
+  </button>
+
+</div>
+
+<div
+  id="rateResetMessage"
+  style="
+    font-size:.8rem;
+    margin-bottom:12px;
+    min-height:18px
+  "
+></div>
     id="rateDashboardContent"
     class="rate-dashboard-content"
   >
@@ -2012,7 +2062,12 @@ async function loadRateDashboard() {
       data;
 
     globalStatus.textContent =
-      `${global.availableKeys}/${global.totalKeys} keys available`;
+  `${global.availableKeys}/${global.totalKeys} keys available` +
+  (
+    global.staleProfiles
+      ? ` • ${global.staleProfiles} stale profile(s)`
+      : ''
+  );
 
     let html = `
       <div class="rate-global-card">
@@ -2282,6 +2337,254 @@ async function loadRateDashboard() {
   }
 }
 
+// ============================================================
+// LLM RATE INTELLIGENCE CONTROLS
+// ============================================================
+
+const softRateResetButton =
+  document.getElementById(
+    'softRateResetButton'
+  );
+
+const learningRateResetButton =
+  document.getElementById(
+    'learningRateResetButton'
+  );
+
+const hardRateResetButton =
+  document.getElementById(
+    'hardRateResetButton'
+  );
+
+const cleanupRateProfilesButton =
+  document.getElementById(
+    'cleanupRateProfilesButton'
+  );
+
+const rateResetMessage =
+  document.getElementById(
+    'rateResetMessage'
+  );
+
+
+function setRateResetMessage(
+  message,
+  isError = false
+) {
+
+  if (!rateResetMessage) {
+    return;
+  }
+
+  rateResetMessage.textContent =
+    message;
+
+  rateResetMessage.style.color =
+    isError
+      ? 'var(--err)'
+      : 'var(--ok)';
+}
+
+
+async function resetRateIntelligence(
+  mode
+) {
+
+  let confirmationMessage;
+
+  if (
+    mode === 'soft'
+  ) {
+
+    confirmationMessage =
+      'Soft reset will unlock keys and clear temporary cooldown/error state. Continue?';
+
+  } else if (
+    mode === 'learning'
+  ) {
+
+    confirmationMessage =
+      'Learning reset will erase learned rate intervals and health statistics, but will NOT delete your API keys. Continue?';
+
+  } else {
+
+    confirmationMessage =
+      'HARD RESET will permanently delete ALL LLM rate intelligence profiles. Your API keys stored in batches will NOT be deleted. Continue?';
+  }
+
+
+  if (
+    !confirm(
+      confirmationMessage
+    )
+  ) {
+    return;
+  }
+
+
+  try {
+
+    setRateResetMessage(
+      'Resetting LLM intelligence...'
+    );
+
+    const response =
+      await fetch(
+        '/api/batch/llm-rate-reset',
+        {
+          method:
+            'POST',
+
+          headers: {
+            'Content-Type':
+              'application/json'
+          },
+
+          body:
+            JSON.stringify({
+              mode
+            })
+        }
+      );
+
+    const data =
+      await response.json();
+
+    if (
+      !response.ok ||
+      !data.ok
+    ) {
+
+      throw new Error(
+        data.error ||
+        'Reset failed'
+      );
+    }
+
+    setRateResetMessage(
+      data.message ||
+      `${mode} reset completed successfully.`
+    );
+
+    await loadRateDashboard();
+
+  } catch (error) {
+
+    console.error(
+      '[RATE RESET]',
+      error
+    );
+
+    setRateResetMessage(
+      error.message ||
+      'Reset failed',
+      true
+    );
+  }
+}
+
+
+async function cleanupStaleRateProfiles() {
+
+  if (
+    !confirm(
+      'Remove rate profiles belonging to API keys that are no longer configured in your batches?'
+    )
+  ) {
+    return;
+  }
+
+
+  try {
+
+    setRateResetMessage(
+      'Cleaning stale profiles...'
+    );
+
+    const response =
+      await fetch(
+        '/api/batch/llm-rate-cleanup',
+        {
+          method:
+            'POST'
+        }
+      );
+
+    const data =
+      await response.json();
+
+    if (
+      !response.ok ||
+      !data.ok
+    ) {
+
+      throw new Error(
+        data.error ||
+        'Cleanup failed'
+      );
+    }
+
+    setRateResetMessage(
+      `Removed ${data.deletedProfiles || 0} stale profile(s).`
+    );
+
+    await loadRateDashboard();
+
+  } catch (error) {
+
+    console.error(
+      '[RATE CLEANUP]',
+      error
+    );
+
+    setRateResetMessage(
+      error.message ||
+      'Cleanup failed',
+      true
+    );
+  }
+}
+
+
+// ============================================================
+// BUTTON EVENTS
+// ============================================================
+
+softRateResetButton?.addEventListener(
+  'click',
+  () => {
+    resetRateIntelligence(
+      'soft'
+    );
+  }
+);
+
+
+learningRateResetButton?.addEventListener(
+  'click',
+  () => {
+    resetRateIntelligence(
+      'learning'
+    );
+  }
+);
+
+
+hardRateResetButton?.addEventListener(
+  'click',
+  () => {
+    resetRateIntelligence(
+      'hard'
+    );
+  }
+);
+
+
+cleanupRateProfilesButton?.addEventListener(
+  'click',
+  cleanupStaleRateProfiles
+);
+  
 
 // Refresh while drawer is open.
 setInterval(
