@@ -138,36 +138,34 @@ function getConfiguredLLMKeys(batch) {
 
   const keys = [];
 
-  // Preferred: multiple environment keys.
-  if (process.env.LLM_API_KEYS) {
-
-    for (
-      const key of process.env.LLM_API_KEYS.split(',')
-    ) {
-
-      const cleaned =
-        String(key || '').trim();
-
-      if (cleaned) {
-        keys.push(cleaned);
-      }
-    }
+  if (Array.isArray(batch?.llmApiKeys)) {
+    keys.push(
+      ...batch.llmApiKeys
+    );
   }
 
-  // Backwards compatibility with existing batch configuration.
+  if (process.env.LLM_API_KEYS) {
+    keys.push(
+      ...process.env.LLM_API_KEYS
+        .split(',')
+        .map(key => key.trim())
+        .filter(Boolean)
+    );
+  }
+
   if (
     batch?.openaiKey &&
     String(batch.openaiKey).trim()
   ) {
-
     keys.push(
       String(batch.openaiKey).trim()
     );
   }
 
-  // Remove duplicates.
   return [
-    ...new Set(keys)
+    ...new Set(
+      keys.filter(Boolean)
+    )
   ];
 }
 
@@ -3068,11 +3066,27 @@ async function createBatch(
       req.body || {};
 
 
-    const apiKey =
-      req.headers[
-        'x-openai-key'
-      ] ||
-      process.env.OPENAI_API_KEY;
+    const rawLLMKeys =
+  req.headers['x-openai-keys'] ||
+  req.headers['x-openai-key'] ||
+  process.env.LLM_API_KEYS ||
+  process.env.OPENAI_API_KEY ||
+  '';
+
+const llmKeys =
+  String(rawLLMKeys)
+    .split(',')
+    .map(key => key.trim())
+    .filter(Boolean);
+
+if (!llmKeys.length) {
+  return res
+    .status(400)
+    .json({
+      error:
+        'At least one LLM API key is required'
+    });
+}
 
 
     const etherscanKey =
