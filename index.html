@@ -2312,12 +2312,454 @@ async function loadRateDashboard() {
                     opacity:.75;
                   "
                 >
-                  ⏳ Cooldown:
-                  ${formatCooldown(
-                    key.cooldownRemainingMs
-                  )}
+async function loadRateDashboard() {
+
+  const content =
+    document.getElementById(
+      'rateDashboardContent'
+    );
+
+  const globalStatus =
+    document.getElementById(
+      'rateGlobalStatus'
+    );
+
+  if (!content || !globalStatus) {
+    console.error(
+      '[RATE DASHBOARD] Required dashboard elements not found'
+    );
+    return;
+  }
+
+
+  try {
+
+    content.innerHTML =
+      'Loading rate intelligence...';
+
+
+    const response =
+      await fetch(
+        `${apiBase()}/api/batch/llm-rate-status`
+      );
+
+
+    const data =
+      await response.json();
+
+
+    if (
+      !response.ok ||
+      !data.ok
+    ) {
+
+      throw new Error(
+        data.error ||
+        'Failed to load rate status'
+      );
+    }
+
+
+    const global =
+      data.global || {};
+
+    const keys =
+      Array.isArray(data.keys)
+        ? data.keys
+        : [];
+
+
+    // ========================================================
+    // HEADER STATUS
+    // ========================================================
+
+    globalStatus.textContent =
+      `${global.availableKeys || 0}/${global.totalKeys || 0} keys available` +
+      (
+        global.staleProfiles > 0
+          ? ` • ${global.staleProfiles} stale profile(s)`
+          : ''
+      );
+
+
+    // ========================================================
+    // GLOBAL CARD
+    // ========================================================
+
+    let html = `
+      <div class="rate-global-card">
+
+        <div class="rate-key-header">
+
+          <strong>
+            Global Controller
+          </strong>
+
+          <span>
+            ${
+              global.queueActive
+                ? '🟢 Active'
+                : '⚪ Idle'
+            }
+          </span>
+
+        </div>
+
+
+        <div class="rate-grid">
+
+          <div class="rate-metric">
+
+            <div class="rate-metric-label">
+              Configured Keys
+            </div>
+
+            <div class="rate-metric-value">
+              ${global.totalKeys || 0}
+            </div>
+
+          </div>
+
+
+          <div class="rate-metric">
+
+            <div class="rate-metric-label">
+              Available
+            </div>
+
+            <div class="rate-metric-value">
+              ${global.availableKeys || 0}
+            </div>
+
+          </div>
+
+
+          <div class="rate-metric">
+
+            <div class="rate-metric-label">
+              Cooling Down
+            </div>
+
+            <div class="rate-metric-value">
+              ${
+                global.cooldownKeys ??
+                global.coolingKeys ??
+                0
+              }
+            </div>
+
+          </div>
+
+
+          <div class="rate-metric">
+
+            <div class="rate-metric-label">
+              Disabled
+            </div>
+
+            <div class="rate-metric-value">
+              ${global.disabledKeys || 0}
+            </div>
+
+          </div>
+
+        </div>
+
+      </div>
+    `;
+
+
+    // ========================================================
+    // NO KEYS
+    // ========================================================
+
+    if (!keys.length) {
+
+      html += `
+        <div class="rate-global-card">
+
+          No active key profiles yet.
+
+          <br><br>
+
+          Start or resume a batch to initialize
+          rate intelligence for your configured keys.
+
+        </div>
+      `;
+    }
+
+
+    // ========================================================
+    // KEY CARDS
+    // ========================================================
+
+    for (
+      const key of keys
+    ) {
+
+      const successThreshold =
+        Number(
+          key.successThreshold || 1
+        );
+
+      const consecutiveSuccesses =
+        Number(
+          key.consecutiveSuccesses || 0
+        );
+
+
+      const progress =
+        Math.min(
+          100,
+          (
+            consecutiveSuccesses /
+            successThreshold
+          ) * 100
+        );
+
+
+      html += `
+
+        <div class="rate-key-card">
+
+
+          <div class="rate-key-header">
+
+            <strong>
+              🔑 •••${
+                key.keyId ||
+                key.keyFingerprint ||
+                'unknown'
+              }
+            </strong>
+
+
+            <span
+              class="
+                rate-status-pill
+                status-${key.status || 'unknown'}
+              "
+            >
+              ${key.status || 'unknown'}
+            </span>
+
+          </div>
+
+
+          <div
+            style="
+              font-size:12px;
+              opacity:.7;
+              margin-bottom:12px;
+            "
+          >
+            ${
+              key.activity ||
+              'No recent activity'
+            }
+          </div>
+
+
+          <div class="rate-grid">
+
+
+            <div class="rate-metric">
+
+              <div class="rate-metric-label">
+                Current Interval
+              </div>
+
+              <div class="rate-metric-value">
+                ${key.currentIntervalMs || 0}ms
+              </div>
+
+            </div>
+
+
+            <div class="rate-metric">
+
+              <div class="rate-metric-label">
+                Fastest Safe
+              </div>
+
+              <div class="rate-metric-value">
+                ${
+                  key.fastestKnownSafeMs ||
+                  0
+                }ms
+              </div>
+
+            </div>
+
+
+            <div class="rate-metric">
+
+              <div class="rate-metric-label">
+                Rate Limits
+              </div>
+
+              <div class="rate-metric-value">
+                ${key.rateLimitHits || 0}
+              </div>
+
+            </div>
+
+
+            <div class="rate-metric">
+
+              <div class="rate-metric-label">
+                Empty Response Streak
+              </div>
+
+              <div class="rate-metric-value">
+                ${
+                  key.emptyResponseStreak ||
+                  0
+                }
+              </div>
+
+            </div>
+
+
+            <div class="rate-metric">
+
+              <div class="rate-metric-label">
+                Total Empty Responses
+              </div>
+
+              <div class="rate-metric-value">
+                ${
+                  key.totalEmptyResponses ||
+                  0
+                }
+              </div>
+
+            </div>
+
+
+            <div class="rate-metric">
+
+              <div class="rate-metric-label">
+                Requests / 1m
+              </div>
+
+              <div class="rate-metric-value">
+                ${
+                  key.requestsLastMinute ||
+                  0
+                }
+              </div>
+
+            </div>
+
+
+            <div class="rate-metric">
+
+              <div class="rate-metric-label">
+                Requests / 30m
+              </div>
+
+              <div class="rate-metric-value">
+                ${
+                  key.requestsLast30Minutes ||
+                  0
+                }
+              </div>
+
+            </div>
+
+
+            <div class="rate-metric">
+
+              <div class="rate-metric-label">
+                Successes
+              </div>
+
+              <div class="rate-metric-value">
+                ${
+                  key.totalSuccesses ||
+                  0
+                }
+              </div>
+
+            </div>
+
+          </div>
+
+
+          <div
+            style="
+              margin-top:14px;
+              font-size:12px;
+            "
+          >
+
+            Learning progress:
+
+            ${consecutiveSuccesses}/
+            ${successThreshold}
+
+          </div>
+
+
+          <div class="rate-progress">
+
+            <div
+              class="rate-progress-bar"
+              style="
+                width:${progress}%
+              "
+            ></div>
+
+          </div>
+
+
+          ${
+            key.cooldownRemaining > 0
+
+              ? `
+
+                <div
+                  style="
+                    margin-top:12px;
+                    font-size:12px;
+                  "
+                >
+
+                  Cooldown:
+                  ${
+                    formatCooldown(
+                      key.cooldownRemaining
+                    )
+                  }
+
                 </div>
               `
+
+              : ''
+          }
+
+
+          ${
+            key.lastErrorCode
+
+              ? `
+
+                <div
+                  style="
+                    margin-top:10px;
+                    font-size:11px;
+                    opacity:.7;
+                  "
+                >
+
+                  Last error:
+                  ${key.lastErrorCode}
+
+                </div>
+              `
+
               : ''
           }
 
@@ -2325,48 +2767,47 @@ async function loadRateDashboard() {
       `;
     }
 
+
     content.innerHTML =
       html;
 
-    const dot =
-      document.getElementById(
-        'rateStatusDot'
-      );
-
-    if (
-      global.availableKeys === 0
-    ) {
-
-      dot.style.background =
-        '#ef4444';
-
-    } else if (
-      global.coolingKeys > 0
-    ) {
-
-      dot.style.background =
-        '#eab308';
-
-    } else {
-
-      dot.style.background =
-        '#22c55e';
-    }
 
   } catch (error) {
 
     console.error(
-      'Rate dashboard error:',
+      '[RATE DASHBOARD]',
       error
     );
 
+
+    globalStatus.textContent =
+      'Unable to load intelligence';
+
+
     content.innerHTML = `
-      <div class="rate-key-card">
-        Failed to load LLM intelligence.
+      <div class="rate-global-card">
+
+        <strong>
+          Failed to load LLM intelligence
+        </strong>
+
+        <div
+          style="
+            margin-top:10px;
+            color:var(--err);
+            font-size:12px;
+          "
+        >
+          ${
+            error.message ||
+            String(error)
+          }
+        </div>
+
       </div>
     `;
   }
-}
+  }
 
 // ============================================================
 // LLM RATE INTELLIGENCE CONTROLS
