@@ -50,7 +50,7 @@ app.use((req, res, next) => {
 
   res.setHeader(
     'Access-Control-Allow-Headers',
-    'Content-Type, x-etherscan-key, x-openai-key'
+    'Content-Type, x-etherscan-key, x-openai-key , x-openai-keys'
   );
 
 
