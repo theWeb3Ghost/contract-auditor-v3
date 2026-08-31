@@ -120,52 +120,62 @@ const KEY_POOL = {
   RATE_LIMIT_COOLDOWN_MS:
     2 * 60 * 1000,
 
-  // Quota failures usually last longer than ordinary rate limits.
+  // Quota failures usually last longer.
   QUOTA_COOLDOWN_MS:
     60 * 60 * 1000,
 
-  // Provider/server failures get a short cooldown.
+  // Provider/server failures.
   PROVIDER_ERROR_COOLDOWN_MS:
     30 * 1000,
 
-  // Invalid credentials stay disabled until server restart/config change.
+  // Invalid credentials.
   INVALID_KEY_COOLDOWN_MS:
-    24 * 60 * 60 * 1000
-};
+    24 * 60 * 60 * 1000,
 
+  // ----------------------------------------------------------
+  // EMPTY RESPONSE HANDLING
+  // ----------------------------------------------------------
+  //
+  // A HTTP 200 empty completion does NOT mean the key is bad.
+  //
+  // We allow retries and only temporarily cool down a key when
+  // empty responses become consecutive/repeated.
+  // ----------------------------------------------------------
+
+  EMPTY_RESPONSE_THRESHOLD:
+    3,
+
+  EMPTY_RESPONSE_COOLDOWN_MS:
+    60 * 1000
+};
 
 function getConfiguredLLMKeys(batch) {
 
-  const keys = [];
-
-  if (Array.isArray(batch?.llmApiKeys)) {
-    keys.push(
-      ...batch.llmApiKeys.map(key=> String(key || '').trim()).filter(Boolean) 
-    );
-  }
-
-  if (process.env.LLM_API_KEYS) {
-    keys.push(
-      ...process.env.LLM_API_KEYS
-        .split(',')
-        .map(key => key.trim())
-        .filter(Boolean)
-    );
-  }
-
   if (
-    batch?.openaiKey &&
-    String(batch.openaiKey).trim()
+    !Array.isArray(
+      batch?.llmApiKeys
+    )
   ) {
-    keys.push(
-      String(batch.openaiKey).trim()
-    );
+    return [];
   }
 
   return [
+
     ...new Set(
-      keys.filter(Boolean)
+
+      batch.llmApiKeys
+
+        .map(
+          key =>
+            String(
+              key || ''
+            ).trim()
+        )
+
+        .filter(Boolean)
+
     )
+
   ];
 }
 
@@ -557,13 +567,23 @@ function errorText(
     error?.message ||
     error ||
     'Unknown error'
-  );
-}
-
+  ) }
 
 function isEmptyAuditResponseError(
   error
 ) {
+
+  const code =
+    String(
+      error?.code ||
+      ''
+    ).toUpperCase();
+
+  if (
+    code === 'EMPTY_RESPONSE'
+  ) {
+    return true;
+  }
 
   const message =
     errorText(
@@ -863,9 +883,26 @@ invalidKeyHits:
 providerErrorHits:
   0,
 
-lastUsedAt:
+// --------------------------------------------------------
+// EMPTY RESPONSE HEALTH
+// --------------------------------------------------------
+//
+// These are separate from rate limits and invalid keys.
+// A HTTP 200 empty response should never permanently
+// disable a key.
+// --------------------------------------------------------
+
+emptyResponseStreak:
+  0,
+
+totalEmptyResponses:
+  0,
+
+lastEmptyResponseAt:
   null,
 
+lastUsedAt:
+  null,
     // --------------------------------------------------------
     // INTERNAL STATE
     // --------------------------------------------------------
@@ -1212,6 +1249,136 @@ lastUsedAt:
 
   profile.unsavedSuccesses =
     0;
+}
+// ============================================================
+// RECORD EMPTY RESPONSE
+// ============================================================
+//
+// EMPTY_RESPONSE is NOT an invalid API key.
+//
+// The provider successfully answered HTTP-wise but returned no
+// usable completion.
+//
+// Strategy:
+//
+// 1st / 2nd consecutive empty response:
+//   - track it
+//   - allow retry/failover
+//
+// 3rd consecutive empty response:
+//   - short cooldown
+//
+// Any successful audit:
+//   - resets the streak
+// ============================================================
+
+async function recordEmptyResponse(
+  db,
+  profile
+) {
+
+  if (!profile) {
+    return;
+  }
+
+  const collection =
+    db.collection(
+      'llm_rate_profiles'
+    );
+
+  const nowDate =
+    now();
+
+  profile.emptyResponseStreak =
+    Number(
+      profile.emptyResponseStreak || 0
+    ) + 1;
+
+  profile.totalEmptyResponses =
+    Number(
+      profile.totalEmptyResponses || 0
+    ) + 1;
+
+  profile.lastEmptyResponseAt =
+    nowDate;
+
+  profile.lastErrorCode =
+    'EMPTY_RESPONSE';
+
+  profile.lastErrorAt =
+    nowDate;
+
+  // Do NOT touch:
+  //
+  // invalidKeyHits
+  // rateLimitHits
+  // quotaHits
+  //
+  // Empty responses are their own failure type.
+
+  if (
+    profile.emptyResponseStreak >=
+    KEY_POOL.EMPTY_RESPONSE_THRESHOLD
+  ) {
+
+    profile.keyStatus =
+      'cooldown';
+
+    profile.cooldownUntil =
+      new Date(
+        Date.now() +
+        KEY_POOL.EMPTY_RESPONSE_COOLDOWN_MS
+      );
+
+    console.warn(
+      `[KEY POOL] key=${profile.keyFingerprint} ` +
+      `entered empty-response cooldown after ` +
+      `${profile.emptyResponseStreak} consecutive empty responses`
+    );
+
+  } else {
+
+    console.warn(
+      `[KEY POOL] Empty response | ` +
+      `key=${profile.keyFingerprint} | ` +
+      `streak=${profile.emptyResponseStreak}/` +
+      `${KEY_POOL.EMPTY_RESPONSE_THRESHOLD}`
+    );
+  }
+
+  await collection.updateOne(
+    {
+      _id:
+        profile._id
+    },
+    {
+      $set: {
+        emptyResponseStreak:
+          profile.emptyResponseStreak,
+
+        totalEmptyResponses:
+          profile.totalEmptyResponses,
+
+        lastEmptyResponseAt:
+          profile.lastEmptyResponseAt,
+
+        keyStatus:
+          profile.keyStatus,
+
+        cooldownUntil:
+          profile.cooldownUntil,
+
+        lastErrorCode:
+          profile.lastErrorCode,
+
+        lastErrorAt:
+          profile.lastErrorAt,
+
+        updatedAt:
+          nowDate
+      }
+    }
+  );
 }
 // ============================================================
 // KEY POOL STATUS
