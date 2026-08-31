@@ -725,7 +725,87 @@ Duplicates are automatically removed.
 Start Audit
 </button>
 
+<!-- CONTRACT NAME SKIP LIST -->
 
+<div class="panel">
+
+  <h2>
+    🚫 Contract Name Skip List
+  </h2>
+
+  <p class="hint">
+    Add contract names you do not want sent to the LLM.
+    Future verified contracts with an exact matching name
+    will be skipped automatically.
+  </p>
+
+  <div
+    style="
+      display:flex;
+      gap:8px;
+      margin-bottom:12px;
+    "
+  >
+
+    <input
+      id="skipContractNameInput"
+      type="text"
+      placeholder="e.g. GnosisSafe"
+      style="
+        margin-bottom:0;
+        flex:1;
+      "
+    />
+
+    <button
+      id="addSkipContractNameButton"
+      type="button"
+      class="secondary"
+      style="
+        white-space:nowrap;
+      "
+    >
+      + Add
+    </button>
+
+  </div>
+
+
+  <div
+    id="skipListMessage"
+    style="
+      min-height:18px;
+      font-size:.8rem;
+      margin-bottom:10px;
+    "
+  ></div>
+
+
+  <div
+    id="skipListCount"
+    class="hint"
+    style="
+      margin-top:0;
+    "
+  >
+    Loading skip list...
+  </div>
+
+
+  <div
+    id="skipListContent"
+    style="
+      max-height:300px;
+      overflow-y:auto;
+    "
+  >
+    Loading...
+  </div>
+
+</div>
+
+
+  
 <!-- BATCH DASHBOARD -->
 
 <div
@@ -1042,6 +1122,25 @@ const llmUrl = $('llmUrl');
 const openaiKey = $('openaiKey');
 const etherscanKey = $('etherscanKey');
 
+// ============================================================
+// CONTRACT NAME SKIP LIST
+// ============================================================
+
+const skipContractNameInput =
+  $('skipContractNameInput');
+
+const addSkipContractNameButton =
+  $('addSkipContractNameButton');
+
+const skipListContent =
+  $('skipListContent');
+
+const skipListMessage =
+  $('skipListMessage');
+
+const skipListCount =
+  $('skipListCount');
+
 const chain = $('chain');
 
 const model = $('model');
@@ -1148,6 +1247,487 @@ systemPrompt.value =
   );
 
 });
+
+
+// ============================================================
+// CONTRACT NAME SKIP LIST
+// ============================================================
+
+function getSkipListApiUrl(
+  path = ''
+) {
+
+  const base =
+    getBaseUrl();
+
+  return (
+    base +
+    '/api/contract-skip-list' +
+    path
+  );
+}
+
+
+// ============================================================
+// DISPLAY MESSAGE
+// ============================================================
+
+function setSkipListMessage(
+  message,
+  isError = false
+) {
+
+  if (!skipListMessage) {
+    return;
+  }
+
+  skipListMessage.textContent =
+    message;
+
+  skipListMessage.style.color =
+    isError
+      ? 'var(--err)'
+      : 'var(--ok)';
+}
+
+
+// ============================================================
+// ESCAPE HTML
+// ============================================================
+//
+// Contract names come from the user/database.
+// Never inject raw values into innerHTML.
+// ============================================================
+
+function escapeHtml(
+  value
+) {
+
+  return String(
+    value ?? ''
+  )
+    .replace(
+      /&/g,
+      '&amp;'
+    )
+    .replace(
+      /</g,
+      '&lt;'
+    )
+    .replace(
+      />/g,
+      '&gt;'
+    )
+    .replace(
+      /"/g,
+      '&quot;'
+    )
+    .replace(
+      /'/g,
+      '&#039;'
+    );
+}
+
+
+// ============================================================
+// LOAD SKIP LIST
+// ============================================================
+
+async function loadContractSkipList() {
+
+  if (
+    !skipListContent ||
+    !skipListCount
+  ) {
+    return;
+  }
+
+  try {
+
+    skipListContent.innerHTML =
+      `
+        <div
+          style="
+            color:var(--text-dim);
+            font-size:.8rem;
+          "
+        >
+          Loading...
+        </div>
+      `;
+
+    const response =
+      await fetch(
+        getSkipListApiUrl()
+      );
+
+    const data =
+      await response.json();
+
+    if (
+      !response.ok ||
+      !data.ok
+    ) {
+      throw new Error(
+        data.error ||
+        'Failed to load skip list'
+      );
+    }
+
+    const rules =
+      Array.isArray(
+        data.rules
+      )
+        ? data.rules
+        : [];
+
+    skipListCount.textContent =
+      `${rules.length} contract name${rules.length === 1 ? '' : 's'} currently skipped`;
+
+    if (!rules.length) {
+
+      skipListContent.innerHTML =
+        `
+          <div
+            style="
+              color:var(--text-dim);
+              font-size:.8rem;
+              padding:10px 0;
+            "
+          >
+            No contract names are currently skipped.
+          </div>
+        `;
+
+      return;
+    }
+
+    skipListContent.innerHTML =
+      rules
+        .map(
+          rule => {
+
+            const displayName =
+              escapeHtml(
+                rule.contractName
+              );
+
+            const normalizedName =
+              encodeURIComponent(
+                rule.normalizedName
+              );
+
+            return `
+              <div
+                style="
+                  display:flex;
+                  align-items:center;
+                  justify-content:space-between;
+                  gap:10px;
+                  padding:10px;
+                  margin-bottom:8px;
+                  background:#101317;
+                  border:1px solid var(--border);
+                  border-radius:8px;
+                "
+              >
+
+                <div
+                  style="
+                    min-width:0;
+                    overflow:hidden;
+                  "
+                >
+
+                  <div
+                    style="
+                      font-family:var(--mono);
+                      word-break:break-word;
+                    "
+                  >
+                    ${displayName}
+                  </div>
+
+                  <div
+                    style="
+                      margin-top:4px;
+                      font-size:11px;
+                      color:var(--text-dim);
+                    "
+                  >
+                    Exact name match
+                  </div>
+
+                </div>
+
+                <button
+                  type="button"
+                  class="danger remove-skip-name"
+                  data-name="${normalizedName}"
+                  style="
+                    padding:7px 10px;
+                    flex-shrink:0;
+                  "
+                >
+                  Remove
+                </button>
+
+              </div>
+            `;
+          }
+        )
+        .join('');
+
+    // Attach remove handlers.
+
+    skipListContent
+      .querySelectorAll(
+        '.remove-skip-name'
+      )
+      .forEach(
+        button => {
+
+          button.addEventListener(
+            'click',
+            async () => {
+
+              const name =
+                button.dataset.name;
+
+              await removeContractSkipName(
+                name
+              );
+            }
+          );
+        }
+      );
+
+  } catch (error) {
+
+    console.error(
+      '[SKIP LIST] Load failed:',
+      error
+    );
+
+    skipListCount.textContent =
+      'Unable to load skip list';
+
+    skipListContent.innerHTML =
+      `
+        <div
+          style="
+            color:var(--err);
+            font-size:.8rem;
+          "
+        >
+          ${
+            escapeHtml(
+              error.message ||
+              String(error)
+            )
+          }
+        </div>
+      `;
+  }
+}
+
+
+// ============================================================
+// ADD CONTRACT NAME
+// ============================================================
+
+async function addContractSkipName() {
+
+  const contractName =
+    skipContractNameInput
+      ?.value
+      ?.trim();
+
+  if (!contractName) {
+
+    setSkipListMessage(
+      'Enter a contract name first.',
+      true
+    );
+
+    skipContractNameInput?.focus();
+
+    return;
+  }
+
+  try {
+
+    addSkipContractNameButton.disabled =
+      true;
+
+    setSkipListMessage(
+      'Adding contract name...'
+    );
+
+    const response =
+      await fetch(
+        getSkipListApiUrl(),
+        {
+          method:
+            'POST',
+
+          headers: {
+            'Content-Type':
+              'application/json'
+          },
+
+          body:
+            JSON.stringify({
+              contractName
+            })
+        }
+      );
+
+    const data =
+      await response.json();
+
+    if (
+      !response.ok ||
+      !data.ok
+    ) {
+      throw new Error(
+        data.error ||
+        'Failed to add contract name'
+      );
+    }
+
+    skipContractNameInput.value =
+      '';
+
+    setSkipListMessage(
+      data.message ||
+      'Contract name added.'
+    );
+
+    await loadContractSkipList();
+
+  } catch (error) {
+
+    console.error(
+      '[SKIP LIST] Add failed:',
+      error
+    );
+
+    setSkipListMessage(
+      error.message ||
+      'Failed to add contract name',
+      true
+    );
+
+  } finally {
+
+    addSkipContractNameButton.disabled =
+      false;
+  }
+}
+
+
+// ============================================================
+// REMOVE CONTRACT NAME
+// ============================================================
+
+async function removeContractSkipName(
+  encodedName
+) {
+
+  try {
+
+    const decodedName =
+      decodeURIComponent(
+        encodedName
+      );
+
+    if (
+      !confirm(
+        `Remove "${decodedName}" from the contract skip list?\n\nFuture contracts with this name will be audited again.`
+      )
+    ) {
+      return;
+    }
+
+    setSkipListMessage(
+      'Removing contract name...'
+    );
+
+    const response =
+      await fetch(
+        getSkipListApiUrl(
+          '/' +
+          encodedName
+        ),
+        {
+          method:
+            'DELETE'
+        }
+      );
+
+    const data =
+      await response.json();
+
+    if (
+      !response.ok ||
+      !data.ok
+    ) {
+      throw new Error(
+        data.error ||
+        'Failed to remove contract name'
+      );
+    }
+
+    setSkipListMessage(
+      data.message ||
+      'Contract name removed.'
+    );
+
+    await loadContractSkipList();
+
+  } catch (error) {
+
+    console.error(
+      '[SKIP LIST] Remove failed:',
+      error
+    );
+
+    setSkipListMessage(
+      error.message ||
+      'Failed to remove contract name',
+      true
+    );
+  }
+}
+
+
+// ============================================================
+// SKIP LIST EVENTS
+// ============================================================
+
+addSkipContractNameButton
+  ?.addEventListener(
+    'click',
+    addContractSkipName
+  );
+
+
+skipContractNameInput
+  ?.addEventListener(
+    'keydown',
+    event => {
+
+      if (
+        event.key === 'Enter'
+      ) {
+
+        event.preventDefault();
+
+        addContractSkipName();
+      }
+    }
+  );
 
 
 // ============================================================
@@ -2855,7 +3435,7 @@ window.addEventListener(
 
   }
 );
-
+loadContractSkipList();
 
 </script>
 
