@@ -667,64 +667,21 @@ function isPipelineStopError(
     return false;
   }
 
-
   const code =
     String(
       error.code ||
       ''
     ).toUpperCase();
 
+  // Only explicit machine-generated error codes should stop
+  // the entire pipeline.
+  //
+  // Do not inspect arbitrary natural-language messages.
 
-  if (
+  return (
     code === 'RATE_LIMIT' ||
     code === 'QUOTA' ||
     code === 'ALL_KEYS_UNAVAILABLE'
-  ) {
-
-    return true;
-  }
-
-
-  const message =
-    errorText(
-      error
-    ).toLowerCase();
-
-
-  return (
-    message.includes(
-      'rate limit'
-    ) ||
-    message.includes(
-      'rate_limit'
-    ) ||
-    message.includes(
-      'too many requests'
-    ) ||
-    message.includes(
-      'requests per second'
-    ) ||
-    message.includes(
-      'free quota'
-    ) ||
-    message.includes(
-      'quota exceeded'
-    ) ||
-    message.includes(
-      'only try 10'
-    ) ||
-    message.includes(
-      'not been recharged'
-    ) ||
-    message.includes(
-      'recharged'
-    ) ||
-    message.includes(
-      'topup'
-    ) ||
-    message.includes(
-      'top-up'
-    )
   );
 }
 
