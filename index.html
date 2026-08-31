@@ -1569,12 +1569,18 @@ const readableStatus =
 // ============================================================
 
 function renderItems(items) {
-
   itemsEl.innerHTML = '';
 
+  const orderedItems =
+    Array.isArray(items)
+      ? [...items].sort(
+          (a, b) =>
+            Number(a?.index ?? 0) -
+            Number(b?.index ?? 0)
+        )
+      : [];
 
-  for (const item of items) {
-
+  for (const item of orderedItems) {
     const row =
       document.createElement('div');
 
@@ -2097,32 +2103,15 @@ async function loadRateDashboard() {
 
         <div class="rate-grid">
 
-          <div class="rate-metric">
-            <div class="rate-metric-label">
-              API Keys
-            </div>
-            <div class="rate-metric-value">
-              ${global.totalKeys}
-            </div>
-          </div>
+    <div class="rate-metric">
+        <div class="rate-metric-label">
+            API Keys
+        </div>
 
-          <div class="rate-grid">
-
-  <div>
-    <span>Empty Response Streak</span>
-    <strong>
-      ${key.emptyResponseStreak || 0}
-    </strong>
-  </div>
-
-  <div>
-    <span>Total Empty Responses</span>
-    <strong>
-      ${key.totalEmptyResponses || 0}
-    </strong>
-  </div>
-
-</div>
+        <div class="rate-metric-value">
+            ${global.totalKeys}
+        </div>
+    </div>
 
           <div class="rate-metric">
             <div class="rate-metric-label">
