@@ -31,6 +31,21 @@ async function getDb() {
 
   console.log('[DB] MongoDB connected');
 
+await db
+  .collection(
+    'llm_rate_profiles'
+  )
+  .createIndex(
+    {
+      llmUrl: 1,
+      model: 1,
+      keyFingerprint: 1
+    },
+    {
+      unique: true
+    }
+  );
+
   // Create useful indexes.
   await Promise.all([
     db.collection('batches').createIndex({ batchId: 1 }, { unique: true }),
