@@ -10,6 +10,12 @@ const {
   resumePendingBatches
 } = require('./api/batch');
 
+const {
+  router: contractSkipListRouter,
+  ensureSkipListIndexes
+} = require('./api/contract-skip-list');
+
+
 
 const app = express();
 
@@ -91,6 +97,11 @@ app.use(
   batchRouter
 );
 
+// Contract name skip list routes.
+app.use(
+  '/api/contract-skip-list',
+  contractSkipListRouter
+);
 
 // ============================================================
 // HEALTH CHECK
@@ -132,10 +143,25 @@ const server =
     PORT,
     '0.0.0.0',
     async () => {
+  console.log(
+    `Contract Auditor listening on port ${PORT}`
+  );
 
-      console.log(
-        `Contract Auditor listening on port ${PORT}`
-      );
+  try {
+
+    await ensureSkipListIndexes();
+
+    console.log(
+      '[CONTRACT SKIP LIST] Index ready'
+    );
+
+  } catch (error) {
+
+    console.error(
+      '[CONTRACT SKIP LIST] Index setup failed:',
+      error
+    );
+  }
 
 
       // Resume unfinished batches after restart.
