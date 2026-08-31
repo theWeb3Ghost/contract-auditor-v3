@@ -1200,6 +1200,15 @@ invalidKeyHits:
 providerErrorHits:
   profile.providerErrorHits,
 
+emptyResponseStreak:
+  profile.emptyResponseStreak,
+
+totalEmptyResponses:
+  profile.totalEmptyResponses,
+
+lastEmptyResponseAt:
+  profile.lastEmptyResponseAt,
+
 lastUsedAt:
   profile.lastUsedAt,
 
