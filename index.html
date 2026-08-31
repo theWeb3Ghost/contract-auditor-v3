@@ -314,7 +314,36 @@ button:disabled {
 
   background: #22c55e;
 }
+@media (max-width: 600px) {
+  .wrap {
+    width: 100%;
+    max-width: 100%;
+    padding: 0;
+  }
 
+  .actions {
+    flex-direction: column;
+  }
+
+  .actions button {
+    width: 100%;
+  }
+
+  .rate-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .rate-drawer {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  input,
+  textarea,
+  select {
+    max-width: 100%;
+  }
+}
 
 .rate-drawer {
   position: fixed;
