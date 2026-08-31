@@ -1453,11 +1453,11 @@ function getKeyCooldownRemaining(profile) {
     Date.now()
   );
 }
-
-
 function getKeyScore(profile) {
 
-  if (!isKeyAvailable(profile)) {
+  if (
+    !isKeyAvailable(profile)
+  ) {
     return -Infinity;
   }
 
@@ -1466,16 +1466,38 @@ function getKeyScore(profile) {
 
   // Faster learned interval = better.
   score -=
-    profile.currentIntervalMs * 10;
+    Number(
+      profile.currentIntervalMs || 0
+    ) * 10;
 
-  // Recent rate limits reduce preference.
+  // Rate limits reduce preference.
   score -=
-    profile.rateLimitHits * 500;
+    Number(
+      profile.rateLimitHits || 0
+    ) * 500;
 
-  // Consecutive successful requests increase confidence.
+  // Repeated empty responses reduce confidence,
+  // but much less aggressively than a real rate limit.
+  score -=
+    Number(
+      profile.emptyResponseStreak || 0
+    ) * 250;
+
+  // Total historical empty responses have a tiny effect.
+  score -=
+    Math.min(
+      Number(
+        profile.totalEmptyResponses || 0
+      ),
+      20
+    ) * 10;
+
+  // Consecutive successes increase confidence.
   score +=
     Math.min(
-      profile.consecutiveSuccesses,
+      Number(
+        profile.consecutiveSuccesses || 0
+      ),
       RATE_LEARNING.SUCCESS_THRESHOLD
     ) * 20;
 
@@ -1483,17 +1505,20 @@ function getKeyScore(profile) {
   if (
     profile.lastUsedAt &&
     Date.now() -
-    new Date(profile.lastUsedAt).getTime()
-      < 5 * 60 * 1000
+      new Date(
+        profile.lastUsedAt
+      ).getTime()
+      <
+      5 * 60 * 1000
   ) {
-    score += 100;
+    score +=
+      100;
   }
 
   return score;
 }
 
-
-// ============================================================
+//====================================================
 // SELECT BEST API KEY
 // ============================================================
 
