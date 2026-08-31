@@ -1,4 +1,3 @@
-
 // api/llm.js
 
 const { fetch, Agent } = require('undici');
@@ -8,33 +7,36 @@ const MAX_CHARS = 60000;
 // Keep the long timeout because some audits can take several minutes.
 const LLM_TIMEOUT = 10 * 60 * 1000;
 
-// Free-tier friendly.
-// The batch worker also enforces the spacing between requests.
-const LLM_REQUEST_TIMEOUT = LLM_TIMEOUT;
-
 const llmDispatcher = new Agent({
-  headersTimeout: LLM_REQUEST_TIMEOUT,
-  bodyTimeout: LLM_REQUEST_TIMEOUT,
+  headersTimeout: LLM_TIMEOUT,
+  bodyTimeout: LLM_TIMEOUT,
 
   connect: {
     timeout: 30000
   }
 });
 
-
 // ============================================================
 // ERROR CLASSIFICATION
 // ============================================================
 //
-// This file ONLY identifies what went wrong.
+// IMPORTANT:
 //
-// batch.js is responsible for:
-//   - API-key selection
-//   - rate learning
-//   - cooldowns
-//   - failover
-//   - pausing when all keys are unavailable
+// We classify PROVIDER ERRORS from:
 //
+//   1. HTTP status
+//   2. Provider error response bodies
+//   3. Structured JSON error objects
+//
+// We DO NOT classify successful LLM audit content.
+//
+// A Solidity audit can legitimately contain words such as:
+//
+//   "unauthorized"
+//   "rate limit"
+//   "quota"
+//
+// Those words inside an actual audit MUST NEVER disable a key.
 // ============================================================
 
 function classifyProviderError(status, text) {
@@ -42,31 +44,36 @@ function classifyProviderError(status, text) {
   const lower =
     String(text || '').toLowerCase();
 
+  const httpStatus =
+    Number(status);
 
   // ----------------------------------------------------------
-  // INVALID / UNAUTHORIZED API KEY
+  // INVALID API KEY
+  //
+  // Require an authentication HTTP status AND explicit
+  // API-key wording.
   // ----------------------------------------------------------
 
   if (
-  status === 401 &&
-  (
-    lower.includes('invalid api key') ||
-    lower.includes('invalid_api_key') ||
-    lower.includes('incorrect api key')
-  )
-) {
-  return 'INVALID_KEY';
+    httpStatus === 401 &&
+    (
+      lower.includes('invalid api key') ||
+      lower.includes('invalid_api_key') ||
+      lower.includes('incorrect api key') ||
+      lower.includes('api key is invalid') ||
+      lower.includes('api key not valid') ||
+      lower.includes('invalid authentication key')
+    )
+  ) {
+    return 'INVALID_KEY';
   }
 
   // ----------------------------------------------------------
   // RATE LIMIT
-  //
-  // This means the key is temporarily sending too many
-  // requests and should be slowed/cooldowned.
   // ----------------------------------------------------------
 
   if (
-    status === 429 ||
+    httpStatus === 429 ||
     lower.includes('rate limit') ||
     lower.includes('rate_limit') ||
     lower.includes('too many requests') ||
@@ -77,18 +84,11 @@ function classifyProviderError(status, text) {
     lower.includes('tpm limit') ||
     lower.includes('rate-limit')
   ) {
-
     return 'RATE_LIMIT';
   }
 
-
   // ----------------------------------------------------------
-  // QUOTA / CREDITS EXHAUSTED
-  //
-  // This is different from a temporary rate limit.
-  //
-  // batch.js can therefore give this key a much longer
-  // cooldown instead of repeatedly retrying it.
+  // QUOTA / CREDITS
   // ----------------------------------------------------------
 
   if (
@@ -103,45 +103,31 @@ function classifyProviderError(status, text) {
     lower.includes('credits exhausted') ||
     lower.includes('credits exceeded') ||
     lower.includes('free credits') ||
-    lower.includes('not been recharged') ||
-    lower.includes('have not been recharged') ||
-    lower.includes('recharged') ||
-    lower.includes('recharge') ||
-    lower.includes('topup') ||
-    lower.includes('top-up') ||
     lower.includes('billing limit') ||
     lower.includes('billing quota') ||
     lower.includes('only try 10 times') ||
     lower.includes('only try 10')
   ) {
-
     return 'QUOTA';
   }
 
-
   // ----------------------------------------------------------
-  // PROVIDER SERVER ERROR
-  //
-  // 5xx errors don't automatically mean the API key is bad.
-  // batch.js should therefore use a short cooldown rather
-  // than permanently disabling the key.
+  // SERVER ERROR
   // ----------------------------------------------------------
 
   if (
-    Number(status) >= 500 &&
-    Number(status) <= 599
+    httpStatus >= 500 &&
+    httpStatus <= 599
   ) {
-
     return 'PROVIDER_ERROR';
   }
-
 
   return null;
 }
 
 
 // ============================================================
-// CREATE STANDARD PROVIDER ERROR
+// CREATE STANDARD ERROR
 // ============================================================
 
 function createProviderError(
@@ -166,6 +152,84 @@ function createProviderError(
 
 
 // ============================================================
+// EXTRACT STRUCTURED PROVIDER ERROR
+// ============================================================
+//
+// Handles OpenAI-compatible providers returning:
+//
+// {
+//   "error": {
+//      "message": "...",
+//      "code": "...",
+//      "type": "..."
+//   }
+// }
+//
+// Also supports simpler:
+//
+// {
+//   "error": "some error"
+// }
+// ============================================================
+
+function extractStructuredProviderError(json) {
+
+  if (
+    !json ||
+    typeof json !== 'object' ||
+    !json.error
+  ) {
+    return null;
+  }
+
+  if (
+    typeof json.error === 'string'
+  ) {
+    return {
+      message:
+        json.error,
+
+      code:
+        null,
+
+      type:
+        null
+    };
+  }
+
+  if (
+    typeof json.error === 'object'
+  ) {
+    return {
+      message:
+        json.error.message ||
+        json.error.error ||
+        JSON.stringify(json.error),
+
+      code:
+        json.error.code ||
+        null,
+
+      type:
+        json.error.type ||
+        null
+    };
+  }
+
+  return {
+    message:
+      String(json.error),
+
+    code:
+      null,
+
+    type:
+      null
+  };
+}
+
+
+// ============================================================
 // ERROR HELPERS
 // ============================================================
 
@@ -173,7 +237,6 @@ function isRateLimitError(
   status,
   text
 ) {
-
   return (
     classifyProviderError(
       status,
@@ -187,7 +250,6 @@ function isQuotaError(
   status,
   text
 ) {
-
   return (
     classifyProviderError(
       status,
@@ -201,7 +263,6 @@ function isInvalidKeyError(
   status,
   text
 ) {
-
   return (
     classifyProviderError(
       status,
@@ -215,7 +276,6 @@ function isProviderError(
   status,
   text
 ) {
-
   return (
     classifyProviderError(
       status,
@@ -247,7 +307,6 @@ async function runLLMAudit({
     !source ||
     typeof source !== 'string'
   ) {
-
     throw new Error(
       'Invalid Solidity source'
     );
@@ -282,7 +341,6 @@ async function runLLMAudit({
   let truncated =
     false;
 
-
   if (
     src.length >
     MAX_CHARS
@@ -306,9 +364,7 @@ async function runLLMAudit({
   const endpoint =
     llmUrl &&
     typeof llmUrl === 'string' &&
-    /^https?:\/\//i.test(
-      llmUrl
-    )
+    /^https?:\/\//i.test(llmUrl)
       ? llmUrl
       : 'https://api.openai.com/v1/chat/completions';
 
@@ -324,7 +380,6 @@ Contract Name: ${contractName || 'Unknown'}
 Contract Address: ${address || 'Unknown'}
 
 SOURCE CODE:
-
 \`\`\`solidity
 ${src}
 \`\`\`
@@ -355,7 +410,6 @@ ${
 
   let response;
 
-
   // ==========================================================
   // SEND REQUEST
   // ==========================================================
@@ -365,7 +419,6 @@ ${
     console.log(
       `[LLM] Sending audit request for ${address}`
     );
-
 
     response =
       await fetch(
@@ -414,10 +467,10 @@ ${
                 }
 
               ]
+
             })
         }
       );
-
 
   } catch (error) {
 
@@ -426,10 +479,8 @@ ${
     // --------------------------------------------------------
 
     if (
-      error?.name ===
-        'AbortError' ||
-      error?.name ===
-        'TimeoutError'
+      error?.name === 'AbortError' ||
+      error?.name === 'TimeoutError'
     ) {
 
       const timeoutError =
@@ -446,9 +497,6 @@ ${
 
     // --------------------------------------------------------
     // NETWORK ERROR
-    //
-    // Don't classify an ordinary network failure as a bad
-    // API key.
     // --------------------------------------------------------
 
     const networkError =
@@ -463,7 +511,6 @@ ${
       error;
 
     throw networkError;
-
 
   } finally {
 
@@ -480,175 +527,54 @@ ${
   const rawText =
     await response.text();
 
-
   console.log(
     `[LLM] ${address} HTTP ${response.status}`
   );
 
 
   // ==========================================================
-  // CLASSIFY PROVIDER RESPONSE
+  // NON-200 HTTP RESPONSE
+  //
+  // ONLY HERE do we classify arbitrary response text by
+  // provider-error keywords.
   // ==========================================================
 
-  const providerCode =
-    classifyProviderError(
-      response.status,
-      rawText
-    );
+  if (!response.ok) {
 
-
-  // ==========================================================
-  // RATE LIMIT
-  // ==========================================================
-
-  if (
-    providerCode ===
-    'RATE_LIMIT'
-  ) {
-
-    throw createProviderError(
-
-      'RATE_LIMIT',
-
-      `LLM provider rate limit: ${rawText.slice(0, 1000)}`,
-
-      {
-        httpStatus:
-          response.status,
-
-        responseText:
-          rawText
-      }
-
-    );
-  }
-
-
-  // ==========================================================
-  // QUOTA
-  // ==========================================================
-
-  if (
-    providerCode ===
-    'QUOTA'
-  ) {
-
-    throw createProviderError(
-
-      'QUOTA',
-
-      `LLM provider quota exhausted: ${rawText.slice(0, 1000)}`,
-
-      {
-        httpStatus:
-          response.status,
-
-        responseText:
-          rawText
-      }
-
-    );
-  }
-
-
-  // ==========================================================
-  // INVALID API KEY
-  // ==========================================================
-
-  if (
-    providerCode ===
-    'INVALID_KEY'
-  ) {
-
-    throw createProviderError(
-
-      'INVALID_KEY',
-
-      `LLM API key rejected: ${rawText.slice(0, 1000)}`,
-
-      {
-        httpStatus:
-          response.status,
-
-        responseText:
-          rawText
-      }
-
-    );
-  }
-
-
-  // ==========================================================
-  // PROVIDER SERVER ERROR
-  // ==========================================================
-
-  if (
-    providerCode ===
-    'PROVIDER_ERROR'
-  ) {
-
-    throw createProviderError(
-
-      'PROVIDER_ERROR',
-
-      `LLM provider server error (${response.status}): ${rawText.slice(0, 1000)}`,
-
-      {
-        httpStatus:
-          response.status,
-
-        responseText:
-          rawText
-      }
-
-    );
-  }
-
-
-  // ==========================================================
-  // OTHER HTTP ERRORS
-  // ==========================================================
-
-  if (
-    !response.ok
-  ) {
-
-    const error =
-      new Error(
-        `LLM API returned HTTP ${response.status}: ${rawText.slice(0, 1000)}`
-      );
-
-    error.httpStatus =
-      response.status;
-
-    error.responseText =
-      rawText;
-
-    // Run the classifier again as a final safety net.
-    const classified =
+    const providerCode =
       classifyProviderError(
         response.status,
         rawText
       );
 
-    if (classified) {
-      error.code =
-        classified;
-    } else {
-      error.code =
-        'HTTP_ERROR';
-    }
+    const error =
+      createProviderError(
+
+        providerCode ||
+        'HTTP_ERROR',
+
+        `LLM API returned HTTP ${response.status}: ${rawText.slice(0, 1000)}`,
+
+        {
+          httpStatus:
+            response.status,
+
+          responseText:
+            rawText
+        }
+      );
 
     throw error;
   }
 
 
   // ==========================================================
-  // JSON PARSING
+  // HTTP 200+ DOES NOT AUTOMATICALLY MEAN SUCCESS
+  //
+  // Parse the body structurally.
   // ==========================================================
 
   let json;
-
 
   try {
 
@@ -656,100 +582,116 @@ ${
       JSON.parse(
         rawText
       );
+
     console.log(
-  '[LLM DEBUG] Response:',
-  JSON.stringify(json).slice(0, 5000)
-);
+      '[LLM DEBUG] Response:',
+      JSON.stringify(json).slice(0, 5000)
+    );
 
   } catch {
 
+    // HTTP 200 but not valid JSON.
     const error =
-      new Error(
-        `LLM returned invalid JSON: ${rawText.slice(0, 1000)}`
+      createProviderError(
+
+        'INVALID_RESPONSE',
+
+        `LLM returned invalid JSON: ${rawText.slice(0, 1000)}`,
+
+        {
+          httpStatus:
+            response.status,
+
+          responseText:
+            rawText
+        }
       );
-
-    error.code =
-      'INVALID_RESPONSE';
-
-    error.httpStatus =
-      response.status;
-
-    error.responseText =
-      rawText;
 
     throw error;
   }
 
 
   // ==========================================================
-  // PROVIDER-LEVEL JSON ERROR
+  // STRUCTURED PROVIDER ERROR
+  //
+  // Example:
+  //
+  // HTTP 200
+  // {
+  //   "error": {
+  //      "message": "rate limit exceeded"
+  //   }
+  // }
+  //
+  // This is why we still inspect HTTP-200 responses.
   // ==========================================================
 
-  if (
-    json.error
-  ) {
+  const structuredError =
+    extractStructuredProviderError(
+      json
+    );
 
-    const message =
-      json.error.message ||
-      JSON.stringify(
-        json.error
-      );
-
+  if (structuredError) {
 
     const providerCode =
       classifyProviderError(
         response.status,
-        message
+        [
+          structuredError.message,
+          structuredError.code,
+          structuredError.type
+        ]
+          .filter(Boolean)
+          .join(' ')
       );
 
+    throw createProviderError(
 
-    const error =
-      new Error(
-        message
-      );
+      providerCode ||
+      'PROVIDER_ERROR',
 
+      structuredError.message,
 
-    error.apiError =
-      json.error;
+      {
+        httpStatus:
+          response.status,
 
-    error.httpStatus =
-      response.status;
+        responseText:
+          rawText,
 
-    error.responseText =
-      rawText;
-
-
-    if (
-      providerCode
-    ) {
-
-      error.code =
-        providerCode;
-
-    } else {
-
-      error.code =
-        'PROVIDER_ERROR';
-    }
-
-
-    throw error;
+        apiError:
+          json.error
+      }
+    );
   }
 
 
   // ==========================================================
-  // EXTRACT RESULT
+  // EXTRACT COMPLETION
+  //
+  // Supports OpenAI-compatible response shapes.
   // ==========================================================
 
   const result =
-    json?.choices?.[0]?.message?.content ||
-    json?.choices?.[0]?.text ||
-    json?.output_text ||
+    json?.choices?.[0]?.message?.content ??
+    json?.choices?.[0]?.text ??
+    json?.output_text ??
     '';
 
 
   // ==========================================================
   // EMPTY RESPONSE
+  //
+  // HTTP 200 is valid transport-wise but the provider gave
+  // no usable audit completion.
+  //
+  // This is NOT:
+  //
+  //   - INVALID_KEY
+  //   - RATE_LIMIT
+  //   - QUOTA
+  //
+  // batch.js handles it independently.
   // ==========================================================
 
   if (
@@ -757,115 +699,38 @@ ${
     !String(result).trim()
   ) {
 
-    const error =
-      new Error(
-        'LLM returned an empty audit response'
-      );
-
-    error.code =
-      'EMPTY_RESPONSE';
-
-    throw error;
-  }
-
-
-  // ==========================================================
-  // FINAL SAFETY CHECK
-  //
-  // Some providers can technically return HTTP 200 while
-  // placing an error/rate-limit/quota message inside the
-  // response body.
-  //
-  // Never allow that to become a completed audit.
-  // ==========================================================
-
-  const resultProviderCode =
-    classifyProviderError(
-      response.status,
-      result
-    );
-
-
-  if (
-    resultProviderCode ===
-    'RATE_LIMIT'
-  ) {
-
     throw createProviderError(
 
-      'RATE_LIMIT',
+      'EMPTY_RESPONSE',
 
-      String(result).slice(
-        0,
-        2000
-      ),
+      'LLM returned an empty audit response',
 
       {
         httpStatus:
           response.status,
 
         responseText:
-          rawText
+          rawText,
+
+        responseShape:
+          Object.keys(json || {})
       }
-
-    );
-  }
-
-
-  if (
-    resultProviderCode ===
-    'QUOTA'
-  ) {
-
-    throw createProviderError(
-
-      'QUOTA',
-
-      String(result).slice(
-        0,
-        2000
-      ),
-
-      {
-        httpStatus:
-          response.status,
-
-        responseText:
-          rawText
-      }
-
-    );
-  }
-
-
-  if (
-    resultProviderCode ===
-    'INVALID_KEY'
-  ) {
-
-    throw createProviderError(
-
-      'INVALID_KEY',
-
-      String(result).slice(
-        0,
-        2000
-      ),
-
-      {
-        httpStatus:
-          response.status,
-
-        responseText:
-          rawText
-      }
-
     );
   }
 
 
   // ==========================================================
   // SUCCESS
+  //
+  // IMPORTANT:
+  //
+  // We deliberately DO NOT scan `result` for words such as:
+  //
+  // "unauthorized"
+  // "rate limit"
+  // "quota"
+  //
+  // because those may legitimately appear in a Solidity audit.
   // ==========================================================
 
   return {
@@ -887,6 +752,8 @@ module.exports = {
   runLLMAudit,
 
   classifyProviderError,
+
+  extractStructuredProviderError,
 
   isRateLimitError,
 
