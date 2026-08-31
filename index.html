@@ -540,13 +540,17 @@ automatic checkpoints and restart recovery.
   placeholder="https://aihubmix.com/v1/chat/completions"
 />
 
-<label>LLM API Key</label>
+<label>LLM API Keys</label>
 
 <input
   id="openaiKey"
   type="password"
-  placeholder="API key"
+  placeholder="apikey1, apikey2, apikey3"
 />
+
+<p class="hint">
+  Enter multiple LLM API Keys separated by commas"
+</p>
 
 <label>Etherscan API Key</label>
 
@@ -1144,13 +1148,8 @@ startBtn.onclick = async () => {
     startBtn.disabled = true;
 
 
-    if (
-      !openaiKey.value.trim()
-    ) {
-      throw new Error(
-        'Enter your LLM API key'
-      );
-    }
+    const llmKeys = openaiKey.value.split(',').map(key=> key.trim()).filter(Boolean);
+    if (!llmKeys.length) { throw new Error ('Enter at least one LLM API key');}
 
 
     if (
@@ -1204,8 +1203,8 @@ startBtn.onclick = async () => {
             'Content-Type':
               'application/json',
 
-            'x-openai-key':
-              openaiKey.value.trim(),
+            'x-openai-keys':
+              llmKeys.join(','),
 
             'x-etherscan-key':
               etherscanKey.value.trim()
