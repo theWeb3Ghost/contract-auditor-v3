@@ -656,6 +656,10 @@ ${
       JSON.parse(
         rawText
       );
+    console.log(
+  '[LLM DEBUG] Response:',
+  JSON.stringify(json).slice(0, 5000)
+);
 
   } catch {
 
