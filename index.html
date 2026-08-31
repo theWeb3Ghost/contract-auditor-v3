@@ -879,12 +879,9 @@ Resume
   id="rateDrawer"
   class="rate-drawer"
 >
-
   <div class="rate-drawer-header">
-
     <div>
       <h3>🧠 LLM Intelligence</h3>
-
       <small id="rateGlobalStatus">
         Loading...
       </small>
@@ -897,76 +894,75 @@ Resume
     >
       ✕
     </button>
-
   </div>
-
 
   <div
     style="
-      display:flex;
-      flex-wrap:wrap;
-      gap:8px;
-      padding:16px 16px 0;
+      padding:16px;
     "
   >
 
-    <button
-      id="softRateResetButton"
-      type="button"
-      class="secondary"
+    <div
+      style="
+        display:flex;
+        flex-wrap:wrap;
+        gap:8px;
+        margin-bottom:14px;
+      "
     >
-      Soft Reset
-    </button>
 
+      <button
+        id="softRateResetButton"
+        type="button"
+        class="secondary"
+      >
+        Soft Reset
+      </button>
 
-    <button
-      id="learningRateResetButton"
-      type="button"
-      class="secondary"
+      <button
+        id="learningRateResetButton"
+        type="button"
+        class="secondary"
+      >
+        Reset Learning
+      </button>
+
+      <button
+        id="hardRateResetButton"
+        type="button"
+        class="danger"
+      >
+        Hard Reset
+      </button>
+
+      <button
+        id="cleanupRateProfilesButton"
+        type="button"
+        class="secondary"
+      >
+        Clean Stale Profiles
+      </button>
+
+    </div>
+
+    <div
+      id="rateResetMessage"
+      style="
+        font-size:.8rem;
+        margin-bottom:12px;
+        min-height:18px;
+      "
+    ></div>
+
+    <div
+      id="rateDashboardContent"
+      class="rate-dashboard-content"
     >
-      Reset Learning
-    </button>
-
-
-    <button
-      id="hardRateResetButton"
-      type="button"
-      class="danger"
-    >
-      Hard Reset
-    </button>
-
-
-    <button
-      id="cleanupRateProfilesButton"
-      type="button"
-      class="secondary"
-    >
-      Clean Stale Profiles
-    </button>
+      Loading rate intelligence...
+    </div>
 
   </div>
-
-
-  <div
-    id="rateResetMessage"
-    style="
-      font-size:.8rem;
-      margin:12px 16px;
-      min-height:18px;
-    "
-  ></div>
-
-
-  <div
-    id="rateDashboardContent"
-    class="rate-dashboard-content"
-  >
-    Loading rate intelligence...
-  </div>
-
 </div>
-
 
 <script>
 
