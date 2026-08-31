@@ -140,7 +140,7 @@ function getConfiguredLLMKeys(batch) {
 
   if (Array.isArray(batch?.llmApiKeys)) {
     keys.push(
-      ...batch.llmApiKeys
+      ...batch.llmApiKeys.map(key=> String(key || '').trim()).filter(Boolean) 
     );
   }
 
@@ -3096,15 +3096,7 @@ if (!llmKeys.length) {
       process.env.ETHERSCAN_API_KEY;
 
 
-    if (!apiKey) {
-
-      return res
-        .status(400)
-        .json({
-          error:
-            'LLM API key is required'
-        });
-    }
+  
 
 
     if (!etherscanKey) {
@@ -3207,8 +3199,8 @@ if (!llmKeys.length) {
       // Retained for the current personal-tool architecture.
       // Do not use this storage approach for a public multi-user
       // production application.
-      openaiKey:
-        apiKey,
+     llmApiKeys:
+        llmKeys,
 
       etherscanKey:
         etherscanKey,
