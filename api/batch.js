@@ -1075,7 +1075,6 @@ async function getRateProfile({
   model,
   apiKey
 }) {
-
   const profileId =
     getRateProfileId({
       llmUrl,
@@ -1083,75 +1082,49 @@ async function getRateProfile({
       apiKey
     });
 
-
   if (
     rateProfiles.has(
       profileId
     )
   ) {
-
     return rateProfiles.get(
       profileId
     );
   }
 
-
   const db =
     await getDb();
-
 
   const collection =
     db.collection(
       'llm_rate_profiles'
     );
 
-
   const existing =
     await collection.findOne({
-      _id:
-        profileId
+      _id: profileId
     });
 
+  if (existing) {
+    const profile =
+      normalizeRateProfile(
+        existing,
+        {
+          profileId,
+          llmUrl,
+          model,
+          apiKey
+        }
+      );
 
-  const profile =
-    normalizeRateProfile(
-      existing,
-      {
-        profileId,
-        llmUrl,
-        model
-      }
+    pruneRateHistory(
+      profile
     );
 
-
-  pruneRateHistory(
-    profile
-  );
-
-
-  // Cache immediately.
-  rateProfiles.set(
-    profileId,
-    profile
-  );
-
-
-  // Create MongoDB document if this is a new profile.
-  if (!existing) {
-
-    await collection.insertOne({
-      ...profile,
-
-      updatedAt:
-        now()
-    });
-
-
-    console.log(
-      `[RATE LEARNER] Created profile for ${model}`
+    rateProfiles.set(
+      profileId,
+      profile
     );
-
-  } else {
 
     console.log(
       `[RATE LEARNER] Loaded profile for ${model}: ` +
@@ -1159,8 +1132,76 @@ async function getRateProfile({
       `${profile.totalSuccesses} successes, ` +
       `${profile.rateLimitHits} rate limits`
     );
+
+    return profile;
   }
 
+  const profile =
+    createDefaultRateProfile({
+      profileId,
+      llmUrl,
+      model,
+      apiKey
+    });
+
+  pruneRateHistory(
+    profile
+  );
+
+  try {
+    await collection.insertOne({
+      ...profile,
+      updatedAt: now()
+    });
+  } catch (error) {
+    // Another concurrent request may have created
+    // this exact profile between findOne() and insertOne().
+    if (
+      error?.code !== 11000
+    ) {
+      throw error;
+    }
+
+    const concurrentProfile =
+      await collection.findOne({
+        _id: profileId
+      });
+
+    if (!concurrentProfile) {
+      throw error;
+    }
+
+    const loadedProfile =
+      normalizeRateProfile(
+        concurrentProfile,
+        {
+          profileId,
+          llmUrl,
+          model,
+          apiKey
+        }
+      );
+
+    pruneRateHistory(
+      loadedProfile
+    );
+
+    rateProfiles.set(
+      profileId,
+      loadedProfile
+    );
+
+    return loadedProfile;
+  }
+
+  rateProfiles.set(
+    profileId,
+    profile
+  );
+
+  console.log(
+    `[RATE LEARNER] Created profile for ${model}`
+  );
 
   return profile;
 }
