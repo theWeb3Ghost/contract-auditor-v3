@@ -15,6 +15,10 @@ const {
   runLLMAudit
 } = require('./llm');
 
+const {
+  shouldSkipContractName
+} = require('./contract-skip-list');
+
 
 // ============================================================
 // CONFIGURATION
@@ -2557,10 +2561,102 @@ async function processBatchItem(
     };
   }
 
+
+
+  // ==========================================================
+// MANUAL CONTRACT NAME SKIP LIST
+// ==========================================================
+//
+// Contract source has already been fetched, so we now know
+// the actual contract name.
+//
+// Check the persistent user-managed skip list BEFORE any
+// LLM request.
+//
+// If a name matches:
+//
+// - No LLM slot is consumed
+// - No API key is used
+// - No retry occurs
+// - No LLM compute is wasted
+//
+// Removing the name from the dashboard will allow future
+// contracts with that name to be audited again.
+// ==========================================================
+
+const skipCheck =
+  await shouldSkipContractName(
+    contract.contractName
+  );
+
+if (
+  skipCheck.skip
+) {
+
+  console.log(
+    `[BATCH ${batch.batchId}] ` +
+    `Skipping contract "${contract.contractName}" ` +
+    `because it matches the manual skip list`
+  );
+
+  await items.updateOne(
+    {
+      _id:
+        item._id
+    },
+    {
+      $set: {
+
+        status:
+          'skipped',
+
+        contractName:
+          contract.contractName,
+
+        compilerVersion:
+          contract.compilerVersion,
+
+        implementation:
+          contract.implementation ||
+          null,
+
+        isProxy:
+          contract.isProxy ||
+          false,
+
+        auditedAddress:
+          contract.auditedAddress ||
+          address,
+
+        error:
+          `Manual skip list match: ${contract.contractName}`,
+
+        skipReason:
+          'manual_contract_name_skip',
+
+        skippedRule:
+          skipCheck.rule?.contractName ||
+          contract.contractName,
+
+        finishedAt:
+          now()
+      }
+    }
+  );
+
+  return {
+    status:
+      'skipped',
+
+    reason:
+      'manual_contract_name_skip'
+  };
+}
+
+
 // ==========================================================
 // LLM AUDIT
 // ==========================================================
-
 
 
 
