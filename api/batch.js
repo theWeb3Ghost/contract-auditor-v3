@@ -1750,6 +1750,12 @@ async function recordLLMSuccess(
   profile.unsavedSuccesses +=
     1;
 
+  // A successful LLM response breaks the consecutive
+// empty-response streak.
+
+profile.emptyResponseStreak =
+  0;
+
   // ----------------------------------------------------------
   // DISCOVER FASTER SAFE ZONE
   // ----------------------------------------------------------
