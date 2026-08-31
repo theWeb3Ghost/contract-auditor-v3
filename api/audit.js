@@ -21,7 +21,7 @@ const { fetch, Agent } = require('undici');
 const jobs = new Map();
 
 // Maximum Solidity source characters sent to the LLM
-const MAX_CHARS = 60000;
+const MAX_CHARS = 300000;
 
 // Keep completed jobs for 30 minutes
 const JOB_TTL = 30 * 60 * 1000;
