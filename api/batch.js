@@ -2660,15 +2660,15 @@ if (
 ) {
 
   await recordEmptyResponse(
-    db,
-    profile
-  );
+  db,
+  rateProfile
+);
 
-  console.warn(
-    `[KEY POOL] Request failed | ` +
-    `code=EMPTY_RESPONSE | ` +
-    `key=${profile.keyFingerprint}`
-  );
+console.warn(
+  `[KEY POOL] Request failed | ` +
+  `code=EMPTY_RESPONSE | ` +
+  `key=${rateProfile?.keyFingerprint || 'unknown'}`
+);
 
   // Allow the existing item retry mechanism to retry.
   throw error;
