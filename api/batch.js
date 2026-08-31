@@ -2601,6 +2601,36 @@ for (
       `key=${rateProfile?.keyFingerprint || 'unknown'}`
     );
 
+    // ==========================================================
+// EMPTY RESPONSE
+// ==========================================================
+//
+// HTTP 200 but no usable completion.
+//
+// This must NEVER be treated as INVALID_KEY.
+// ==========================================================
+
+if (
+  isEmptyAuditResponseError(
+    error
+  )
+) {
+
+  await recordEmptyResponse(
+    db,
+    profile
+  );
+
+  console.warn(
+    `[KEY POOL] Request failed | ` +
+    `code=EMPTY_RESPONSE | ` +
+    `key=${profile.keyFingerprint}`
+  );
+
+  // Allow the existing item retry mechanism to retry.
+  throw error;
+}
+
     if (
       [
         'RATE_LIMIT',
