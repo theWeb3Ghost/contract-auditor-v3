@@ -2706,11 +2706,17 @@ if (
 );
 
 console.warn(
-  `[KEY POOL] Request failed | ` +
-  `code=EMPTY_RESPONSE | ` +
-  `key=${rateProfile?.keyFingerprint || 'unknown'}`
-);
+    `[KEY POOL] EMPTY_RESPONSE | ` +
+    `key=${rateProfile?.keyFingerprint || 'unknown'} | ` +
+    `attempt=${attempt}/${maxKeyAttempts}`
+  );
 
+  // Try another API key if one is available.
+  if (
+    attempt < maxKeyAttempts
+  ) {
+    continue;
+  }
   // Allow the existing item retry mechanism to retry.
   throw error;
 }
