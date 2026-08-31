@@ -48,18 +48,15 @@ function classifyProviderError(status, text) {
   // ----------------------------------------------------------
 
   if (
-    status === 401 ||
+  status === 401 &&
+  (
     lower.includes('invalid api key') ||
     lower.includes('invalid_api_key') ||
-    lower.includes('incorrect api key') ||
-    lower.includes('authentication failed') ||
-    lower.includes('invalid authentication') ||
-    lower.includes('unauthorized')
-  ) {
-
-    return 'INVALID_KEY';
+    lower.includes('incorrect api key')
+  )
+) {
+  return 'INVALID_KEY';
   }
-
 
   // ----------------------------------------------------------
   // RATE LIMIT
