@@ -180,6 +180,67 @@ function getConfiguredLLMKeys(batch) {
 }
 
 
+// ============================================================
+// GET ALL CURRENTLY CONFIGURED WEB KEYS
+// ============================================================
+//
+// Keys live inside batches because your web interface submits
+// them with batch configuration.
+//
+// We collect unique fingerprints across batches.
+//
+// Raw API keys are never returned.
+// ============================================================
+
+async function getCurrentConfiguredKeyFingerprints(
+  db
+) {
+
+  const batches =
+    await db
+      .collection(
+        'batches'
+      )
+      .find(
+        {},
+        {
+          projection: {
+            llmApiKeys: 1
+          }
+        }
+      )
+      .toArray();
+
+  const fingerprints =
+    new Set();
+
+  for (
+    const batch
+    of batches
+  ) {
+
+    const keys =
+      getConfiguredLLMKeys(
+        batch
+      );
+
+    for (
+      const key
+      of keys
+    ) {
+
+      fingerprints.add(
+        getKeyFingerprint(
+          key
+        )
+      );
+    }
+  }
+
+  return fingerprints;
+}
+
+
 function getKeyFingerprint(apiKey) {
 
   return crypto
@@ -4436,6 +4497,356 @@ async function resumePendingBatches() {
   }
 }
 
+
+// ============================================================
+// LLM RATE INTELLIGENCE RESET
+// ============================================================
+//
+// Reset modes:
+//
+// soft:
+//   Unlock keys and clear temporary failure state.
+//
+// learning:
+//   Keep profiles but reset all learned rate intelligence.
+//
+// hard:
+//   Delete all rate intelligence profiles.
+//
+// IMPORTANT:
+//
+// None of these delete API keys from batches.
+// Your web/batch configuration remains untouched.
+// ============================================================
+
+async function resetLLMRateIntelligence(
+  req,
+  res
+) {
+
+  try {
+
+    const mode =
+      String(
+        req.body?.mode ||
+        'soft'
+      )
+        .trim()
+        .toLowerCase();
+
+    const db =
+      await getDb();
+
+    const collection =
+      db.collection(
+        'llm_rate_profiles'
+      );
+
+
+    // ========================================================
+    // HARD RESET
+    // ========================================================
+
+    if (
+      mode === 'hard'
+    ) {
+
+      const result =
+        await collection.deleteMany(
+          {}
+        );
+
+      console.log(
+        `[LLM RESET] Hard reset deleted ` +
+        `${result.deletedCount} rate profiles`
+      );
+
+      return res.json({
+        ok: true,
+
+        mode:
+          'hard',
+
+        deletedProfiles:
+          result.deletedCount,
+
+        message:
+          'All LLM rate intelligence was deleted. API keys stored in batches were not deleted.'
+      });
+    }
+
+
+    // ========================================================
+    // LEARNING RESET
+    // ========================================================
+
+    if (
+      mode === 'learning'
+    ) {
+
+      const timestamp =
+        now();
+
+      const result =
+        await collection.updateMany(
+          {},
+          {
+            $set: {
+
+              // Rate learning.
+              currentIntervalMs:
+                RATE_LEARNING.DEFAULT_INTERVAL_MS,
+
+              fastestKnownSafeMs:
+                RATE_LEARNING.DEFAULT_INTERVAL_MS,
+
+              lastFailedIntervalMs:
+                null,
+
+              consecutiveSuccesses:
+                0,
+
+              totalSuccesses:
+                0,
+
+              rateLimitHits:
+                0,
+
+              recentRequests:
+                [],
+
+              lastRequestAt:
+                0,
+
+              lastRateLimitAt:
+                null,
+
+              // Empty response learning.
+              emptyResponseStreak:
+                0,
+
+              totalEmptyResponses:
+                0,
+
+              lastEmptyResponseAt:
+                null,
+
+              // Key health.
+              keyStatus:
+                'available',
+
+              cooldownUntil:
+                null,
+
+              lastErrorCode:
+                null,
+
+              lastErrorAt:
+                null,
+
+              quotaHits:
+                0,
+
+              invalidKeyHits:
+                0,
+
+              providerErrorHits:
+                0,
+
+              updatedAt:
+                timestamp
+            }
+          }
+        );
+
+      console.log(
+        `[LLM RESET] Learning reset modified ` +
+        `${result.modifiedCount} profile(s)`
+      );
+
+      return res.json({
+        ok: true,
+
+        mode:
+          'learning',
+
+        modifiedProfiles:
+          result.modifiedCount,
+
+        message:
+          'LLM rate learning and key health state were reset. API keys were not deleted.'
+      });
+    }
+
+
+    // ========================================================
+    // SOFT RESET
+    // ========================================================
+
+    if (
+      mode === 'soft'
+    ) {
+
+      const timestamp =
+        now();
+
+      const result =
+        await collection.updateMany(
+          {},
+          {
+            $set: {
+
+              keyStatus:
+                'available',
+
+              cooldownUntil:
+                null,
+
+              lastErrorCode:
+                null,
+
+              lastErrorAt:
+                null,
+
+              consecutiveSuccesses:
+                0,
+
+              emptyResponseStreak:
+                0,
+
+              lastEmptyResponseAt:
+                null,
+
+              recentRequests:
+                [],
+
+              lastRequestAt:
+                0,
+
+              updatedAt:
+                timestamp
+            }
+          }
+        );
+
+      console.log(
+        `[LLM RESET] Soft reset modified ` +
+        `${result.modifiedCount} profile(s)`
+      );
+
+      return res.json({
+        ok: true,
+
+        mode:
+          'soft',
+
+        modifiedProfiles:
+          result.modifiedCount,
+
+        message:
+          'Temporary key lockouts, cooldowns, recent request history and empty-response streaks were cleared.'
+      });
+    }
+
+
+    return res.status(400).json({
+      ok: false,
+
+      error:
+        'Invalid reset mode. Use soft, learning, or hard.'
+    });
+
+  } catch (error) {
+
+    console.error(
+      '[LLM RESET] Failed:',
+      error
+    );
+
+    return res.status(500).json({
+      ok: false,
+
+      error:
+        errorText(error)
+    });
+  }
+}
+
+// ============================================================
+// CLEAN UP STALE RATE PROFILES
+// ============================================================
+//
+// Removes intelligence profiles whose key fingerprints no longer
+// correspond to any key configured through the web/batches.
+// ============================================================
+
+async function cleanupStaleLLMProfiles(
+  req,
+  res
+) {
+
+  try {
+
+    const db =
+      await getDb();
+
+    const configuredFingerprints =
+      await getCurrentConfiguredKeyFingerprints(
+        db
+      );
+
+    const collection =
+      db.collection(
+        'llm_rate_profiles'
+      );
+
+    const result =
+      await collection.deleteMany(
+        {
+          keyFingerprint: {
+            $nin:
+              [
+                ...configuredFingerprints
+              ]
+          }
+        }
+      );
+
+    console.log(
+      `[LLM CLEANUP] Removed ` +
+      `${result.deletedCount} stale rate profile(s)`
+    );
+
+    return res.json({
+
+      ok:
+        true,
+
+      deletedProfiles:
+        result.deletedCount,
+
+      message:
+        'Stale LLM rate profiles removed.'
+    });
+
+  } catch (error) {
+
+    console.error(
+      '[LLM CLEANUP] Failed:',
+      error
+    );
+
+    return res.status(500).json({
+
+      ok:
+        false,
+
+      error:
+        errorText(error)
+    });
+  }
+}
+
 // ============================================================
 // LLM RATE INTELLIGENCE STATUS
 // ============================================================
@@ -4450,19 +4861,59 @@ async function getLLMRateStatus(
     const db =
       await getDb();
 
-    const profiles =
-      await db
-        .collection(
-          'llm_rate_profiles'
-        )
+    const collection =
+      db.collection(
+        'llm_rate_profiles'
+      );
+
+    // --------------------------------------------------------
+    // Discover keys actually configured through the web/batches.
+    // --------------------------------------------------------
+
+    const configuredFingerprints =
+      await getCurrentConfiguredKeyFingerprints(
+        db
+      );
+
+    // --------------------------------------------------------
+    // Load all profiles.
+    // --------------------------------------------------------
+
+    const allProfiles =
+      await collection
         .find({})
         .sort({
           updatedAt: -1
         })
         .toArray();
 
+    // --------------------------------------------------------
+    // Separate active configured profiles from historical/stale
+    // profiles.
+    // --------------------------------------------------------
+
+    const activeProfiles =
+      allProfiles.filter(
+        profile =>
+          configuredFingerprints.has(
+            profile.keyFingerprint
+          )
+      );
+
+    const staleProfiles =
+      allProfiles.filter(
+        profile =>
+          !configuredFingerprints.has(
+            profile.keyFingerprint
+          )
+      );
+
+    // --------------------------------------------------------
+    // Normalize active profiles.
+    // --------------------------------------------------------
+
     const normalized =
-      profiles.map(
+      activeProfiles.map(
         raw => {
 
           const profile =
@@ -4483,217 +4934,180 @@ async function getLLMRateStatus(
               }
             );
 
-          pruneRateHistory(
-            profile
-          );
-
           const cooldownRemaining =
             getKeyCooldownRemaining(
               profile
             );
 
-          let status =
-            profile.keyStatus ||
-            'available';
-
-          if (
-            status === 'cooldown' &&
-            cooldownRemaining <= 0
-          ) {
-            status =
-              'available';
-          }
-
-          let activity =
-            'stable';
-
-          let nextAction =
-            'Maintain current interval';
-
-          if (
-            status === 'cooldown'
-          ) {
-
-            activity =
-              'recovering';
-
-            nextAction =
-              'Waiting for cooldown';
-
-          } else if (
-            status === 'disabled'
-          ) {
-
-            activity =
-              'disabled';
-
-            nextAction =
-              'Replace invalid key';
-
-          } else if (
-            profile.consecutiveSuccesses > 0 &&
-            profile.consecutiveSuccesses <
-            RATE_LEARNING.SUCCESS_THRESHOLD
-          ) {
-
-            activity =
-              'learning';
-
-            nextAction =
-              'Collect more successful requests';
-
-          } else if (
-            profile.consecutiveSuccesses >=
-            RATE_LEARNING.SUCCESS_THRESHOLD - 5
-          ) {
-
-            activity =
-              'approaching_speedup';
-
-            nextAction =
-              'Preparing to test faster interval';
-          }
+          const available =
+            isKeyAvailable(
+              profile
+            );
 
           return {
 
-            keyId:
-              profile.keyFingerprint ||
-              String(profile._id).slice(-12),
+            keyFingerprint:
+              profile.keyFingerprint,
 
-            status,
+            status:
+              available
+                ? 'available'
+                : (
+                    profile.keyStatus ||
+                    'cooldown'
+                  ),
 
-            activity,
-
-            nextAction,
+            cooldownRemaining,
 
             currentIntervalMs:
               profile.currentIntervalMs,
-
-            requestsPerSecond:
-              Number(
-                (
-                  1000 /
-                  profile.currentIntervalMs
-                ).toFixed(2)
-              ),
 
             fastestKnownSafeMs:
               profile.fastestKnownSafeMs,
 
             lastFailedIntervalMs:
-              profile.lastFailedIntervalMs,
+              profile.lastFailedIntervalMs ||
+              null,
 
             consecutiveSuccesses:
-              profile.consecutiveSuccesses,
-
-            successThreshold:
-              RATE_LEARNING.SUCCESS_THRESHOLD,
-
-            successesUntilSpeedup:
-              Math.max(
-                0,
-                RATE_LEARNING.SUCCESS_THRESHOLD -
-                profile.consecutiveSuccesses
-              ),
+              profile.consecutiveSuccesses ||
+              0,
 
             totalSuccesses:
-              profile.totalSuccesses,
+              profile.totalSuccesses ||
+              0,
 
             rateLimitHits:
-              profile.rateLimitHits,
+              profile.rateLimitHits ||
+              0,
 
             quotaHits:
-              profile.quotaHits || 0,
+              profile.quotaHits ||
+              0,
+
+            invalidKeyHits:
+              profile.invalidKeyHits ||
+              0,
 
             providerErrorHits:
-              profile.providerErrorHits || 0,
+              profile.providerErrorHits ||
+              0,
 
-            requestsLastMinute:
-              getRequestsInWindow(
-                profile,
-                60 * 1000
-              ),
+            emptyResponseStreak:
+              profile.emptyResponseStreak ||
+              0,
 
-            requestsLast30Minutes:
-              getRequestsInWindow(
-                profile,
-                30 * 60 * 1000
-              ),
+            totalEmptyResponses:
+              profile.totalEmptyResponses ||
+              0,
 
-            cooldownRemainingMs:
-              cooldownRemaining,
-
-            lastRequestAt:
-              profile.lastRequestAt || null,
-
-            lastRateLimitAt:
-              profile.lastRateLimitAt || null,
+            lastEmptyResponseAt:
+              profile.lastEmptyResponseAt ||
+              null,
 
             lastErrorCode:
-              profile.lastErrorCode || null
+              profile.lastErrorCode ||
+              null,
+
+            lastErrorAt:
+              profile.lastErrorAt ||
+              null,
+
+            lastUsedAt:
+              profile.lastUsedAt ||
+              null,
+
+            updatedAt:
+              profile.updatedAt ||
+              null
           };
         }
       );
 
+    // --------------------------------------------------------
+    // Count states.
+    // --------------------------------------------------------
+
     const availableKeys =
       normalized.filter(
         key =>
-          key.status === 'available' ||
-          key.status === 'active'
+          key.status ===
+          'available'
       ).length;
 
-    const coolingKeys =
+    const cooldownKeys =
       normalized.filter(
         key =>
-          key.status === 'cooldown'
+          key.status ===
+          'cooldown'
       ).length;
 
     const disabledKeys =
       normalized.filter(
         key =>
-          key.status === 'disabled'
+          key.status ===
+          'disabled'
       ).length;
+
 
     return res.json({
 
-      ok: true,
-
-      updatedAt:
-        now(),
+      ok:
+        true,
 
       global: {
 
-        queueActive:
-          activeWorkers.size > 0,
-
-        activeWorkers:
-          activeWorkers.size,
-
         totalKeys:
-          normalized.length,
+          configuredFingerprints.size,
 
         availableKeys,
 
-        coolingKeys,
+        cooldownKeys,
 
         disabledKeys,
 
-        telemetryWindowMinutes:
-          30
+        staleProfiles:
+          staleProfiles.length,
+
+        queueActive:
+          activeWorkers.size > 0
       },
 
       keys:
-        normalized
+        normalized,
+
+      staleProfiles:
+        staleProfiles.map(
+          profile => ({
+            keyFingerprint:
+              profile.keyFingerprint,
+
+            keyStatus:
+              profile.keyStatus ||
+              'unknown',
+
+            updatedAt:
+              profile.updatedAt ||
+              null
+          })
+        )
     });
 
   } catch (error) {
 
-    return res
-      .status(500)
-      .json({
-        error:
-          errorText(error)
-      });
+    console.error(
+      '[LLM RATE STATUS] Failed:',
+      error
+    );
+
+    return res.status(500).json({
+
+      ok:
+        false,
+
+      error:
+        errorText(error)
+    });
   }
 }
 
@@ -4709,10 +5123,29 @@ router.post(
   '/',
   createBatch
 );
+
+// ============================================================
+// LLM RATE INTELLIGENCE ADMIN ROUTES
+// ============================================================
+
 router.get(
   '/llm-rate-status',
   getLLMRateStatus
 );
+
+
+router.post(
+  '/llm-rate-reset',
+  express.json(),
+  resetLLMRateIntelligence
+);
+
+
+router.post(
+  '/llm-rate-cleanup',
+  cleanupStaleLLMProfiles
+);
+
 
 router.get(
   '/:batchId',
