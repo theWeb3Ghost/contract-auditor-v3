@@ -598,7 +598,8 @@ function isPipelineStopError(
 
   if (
     code === 'RATE_LIMIT' ||
-    code === 'QUOTA'
+    code === 'QUOTA' ||
+    code === 'ALL_KEYS_UNAVAILABLE'
   ) {
 
     return true;
