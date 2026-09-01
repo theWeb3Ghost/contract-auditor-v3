@@ -19,6 +19,10 @@ const {
   shouldSkipContractName
 } = require('./contract-skip-list');
 
+const {
+  updateBatchConfig
+} = require('./batch-config');
+
 
 // ============================================================
 // CONFIGURATION
