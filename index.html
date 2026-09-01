@@ -2326,6 +2326,243 @@ function escapeHtml(value) {
 }
 
 
+
+
+
+// ============================================================
+// UPDATE EXISTING BATCH CONFIGURATION
+// ============================================================
+//
+// IMPORTANT:
+//
+// This does NOT restart the batch.
+// This does NOT delete results.
+// This does NOT reset progress.
+//
+// It only updates the model, system prompt and LLM endpoint
+// stored inside the existing MongoDB batch.
+//
+// The batch must be paused first.
+// ============================================================
+
+updateBatchConfigBtn.onclick =
+  async () => {
+
+    if (!currentBatchId) {
+
+      alert(
+        'There is no active batch.'
+      );
+
+      return;
+
+    }
+
+
+    // ----------------------------------------------------------
+    // Ask the backend for the CURRENT batch state first.
+    // This prevents accidentally changing a running batch.
+    // ----------------------------------------------------------
+
+    updateBatchConfigBtn.disabled =
+      true;
+
+
+    try {
+
+      const stateResponse =
+        await fetch(
+          `${apiBase()}/api/batch/${encodeURIComponent(currentBatchId)}`
+        );
+
+
+      const batch =
+        await stateResponse.json();
+
+
+      if (
+        !stateResponse.ok
+      ) {
+
+        throw new Error(
+          batch.error ||
+          'Could not load current batch'
+        );
+
+      }
+
+
+      const currentStatus =
+        batch.status;
+
+
+      if (
+        ![
+          'paused',
+          'paused_rate_limit',
+          'interrupted'
+        ].includes(
+          currentStatus
+        )
+      ) {
+
+        throw new Error(
+          'Pause the batch before applying a new model or prompt.'
+        );
+
+      }
+
+
+      // --------------------------------------------------------
+      // READ CURRENT UI SETTINGS
+      // --------------------------------------------------------
+
+      const newModel =
+        model.value.trim();
+
+      const newPrompt =
+        systemPrompt.value;
+
+      const newLlmUrl =
+        llmUrl.value.trim();
+
+
+      if (!newModel) {
+
+        throw new Error(
+          'Model cannot be empty.'
+        );
+
+      }
+
+
+      if (!newPrompt.trim()) {
+
+        throw new Error(
+          'System prompt cannot be empty.'
+        );
+
+      }
+
+
+      if (!newLlmUrl) {
+
+        throw new Error(
+          'LLM endpoint cannot be empty.'
+        );
+
+      }
+
+
+      // --------------------------------------------------------
+      // CONFIRM
+      // --------------------------------------------------------
+
+      const confirmed =
+        confirm(
+          'Update this paused batch to the current Model / Prompt settings?\n\n' +
+          `Model:\n${newModel}\n\n` +
+          'Your existing completed contracts and progress will NOT be reset.'
+        );
+
+
+      if (!confirmed) {
+
+        return;
+
+      }
+
+
+      // --------------------------------------------------------
+      // SEND CONFIGURATION TO BACKEND
+      // --------------------------------------------------------
+
+      const response =
+        await fetch(
+          `${apiBase()}/api/batch/${encodeURIComponent(currentBatchId)}/config`,
+          {
+
+            method:
+              'POST',
+
+            headers: {
+
+              'Content-Type':
+                'application/json'
+
+            },
+
+            body:
+              JSON.stringify({
+
+                model:
+                  newModel,
+
+                systemPrompt:
+                  newPrompt,
+
+                llmUrl:
+                  newLlmUrl
+
+              })
+
+          }
+        );
+
+
+      const data =
+        await response.json();
+
+
+      if (
+        !response.ok ||
+        !data.ok
+      ) {
+
+        throw new Error(
+          data.error ||
+          'Could not update batch configuration'
+        );
+
+      }
+
+
+      // --------------------------------------------------------
+      // SUCCESS
+      // --------------------------------------------------------
+
+      alert(
+        'Batch configuration updated successfully.\n\n' +
+        `Model: ${data.config.model}\n\n` +
+        'The new configuration will be used when you Resume the batch.'
+      );
+
+
+      await refreshBatch();
+
+
+    } catch (error) {
+
+      console.error(
+        'Batch configuration update error:',
+        error
+      );
+
+
+      alert(
+        error.message ||
+        String(error)
+      );
+
+
+    } finally {
+
+      updateBatchConfigBtn.disabled =
+        false;
+
+    }
+
+  };
 // ============================================================
 // PAUSE
 // ============================================================
