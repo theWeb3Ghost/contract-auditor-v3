@@ -2163,6 +2163,13 @@ const readableStatus =
       'interrupted'
     ]
     .includes(status);
+  updateBatchConfigBtn.disabled =
+  ![
+    'paused',
+    'paused_rate_limit',
+    'interrupted'
+  ]
+  .includes(status);
 
   restartBtn.disabled =
     
