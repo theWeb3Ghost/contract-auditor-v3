@@ -5270,6 +5270,13 @@ router.post(
 
 
 router.post(
+  '/:batchId/config',
+  express.json(),
+  updateBatchConfig
+);
+
+
+router.post(
   '/:batchId/resume',
   resumeBatch
 );
