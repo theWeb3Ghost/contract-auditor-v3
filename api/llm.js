@@ -451,9 +451,7 @@ ${
                 'gpt-4o-mini',
 
               max_tokens: 32000,
-reasoning: {
-  max_tokens: 10000   // generous room to actually reason through chained exploits
-},
+   reasoning: { effort: 'medium' },
 
               messages: [
 
