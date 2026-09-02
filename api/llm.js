@@ -339,14 +339,14 @@ function isProviderError(
 // exact, just good enough to decide "will this likely fit".
 function estimateTokens(text) {
   return Math.ceil(
-    String(text || '').length / 4
+    String(text || '').length / 3
   );
 }
 
 // Leave real headroom under a typical free-tier ~64-66K token
 // cap: system prompt + both audit passes' overhead all eat into
 // this budget too, not just the raw source.
-const SAFE_PROMPT_TOKEN_LIMIT = 50000;
+const SAFE_PROMPT_TOKEN_LIMIT = 20000;
 
 // Find (numParts - 1) safe places to cut the source — each one
 // the end of a function/block ("}" followed by a newline) nearest
