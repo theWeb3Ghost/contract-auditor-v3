@@ -37,7 +37,9 @@ async function updateBatchConfig(
     const {
       model,
       systemPrompt,
-      llmUrl
+      llmUrl,
+      llmApiKeys,
+      etherscanKey
     } = req.body || {};
 
 
@@ -58,6 +60,23 @@ async function updateBatchConfig(
     const cleanLlmUrl =
       String(
         llmUrl || ''
+      ).trim();
+
+    // llmApiKeys can arrive as an array (already split by the
+    // frontend) or as a raw comma-separated string. Support both.
+    const cleanApiKeys =
+      Array.isArray(llmApiKeys)
+        ? llmApiKeys
+            .map(key => String(key || '').trim())
+            .filter(Boolean)
+        : String(llmApiKeys || '')
+            .split(',')
+            .map(key => key.trim())
+            .filter(Boolean);
+
+    const cleanEtherscanKey =
+      String(
+        etherscanKey || ''
       ).trim();
 
 
@@ -183,6 +202,35 @@ async function updateBatchConfig(
     const updatedAt =
       new Date();
 
+    // Only overwrite credentials if the caller actually sent new
+    // ones. An empty field means "leave this alone" â€” otherwise
+    // every model/prompt tweak would force you to re-paste keys.
+    const setFields = {
+
+      model:
+        cleanModel,
+
+      systemPrompt:
+        cleanPrompt,
+
+      llmUrl:
+        cleanLlmUrl,
+
+      configUpdatedAt:
+        updatedAt,
+
+      updatedAt
+
+    };
+
+    if (cleanApiKeys.length) {
+      setFields.llmApiKeys = cleanApiKeys;
+    }
+
+    if (cleanEtherscanKey) {
+      setFields.etherscanKey = cleanEtherscanKey;
+    }
+
 
     const result =
       await batches.updateOne(
@@ -197,23 +245,7 @@ async function updateBatchConfig(
         },
 
         {
-          $set: {
-
-            model:
-              cleanModel,
-
-            systemPrompt:
-              cleanPrompt,
-
-            llmUrl:
-              cleanLlmUrl,
-
-            configUpdatedAt:
-              updatedAt,
-
-            updatedAt
-
-          }
+          $set: setFields
         }
       );
 
@@ -260,7 +292,15 @@ async function updateBatchConfig(
           cleanPrompt,
 
         llmUrl:
-          cleanLlmUrl
+          cleanLlmUrl,
+
+        // Never echo raw keys back to the client â€” just confirm
+        // whether they were actually changed this call.
+        apiKeysUpdated:
+          cleanApiKeys.length > 0,
+
+        etherscanKeyUpdated:
+          Boolean(cleanEtherscanKey)
 
       },
 
