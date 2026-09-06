@@ -456,11 +456,7 @@ ${additionalContext ? `\nADDITIONAL AUDIT CONTEXT:\n${String(additionalContext)}
             JSON.stringify({
 
               model:
-                model ||
-                'gpt-4o-mini',
-
-              max_tokens: 32000,
-   reasoning: { effort: 'medium' },
+                model,
 
               messages: [
 
