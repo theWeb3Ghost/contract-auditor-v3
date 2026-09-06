@@ -14,6 +14,8 @@ const {
 //   model
 //   systemPrompt
 //   llmUrl
+//   mode (audit engine)
+//   COM configuration
 //
 // It NEVER changes:
 //
@@ -81,15 +83,47 @@ async function updateBatchConfig(
         etherscanKey || ''
       ).trim();
 
-    const cleanMode = mode === 'com' ? 'com' : 'normal';
-    const cleanCom = com && typeof com === 'object' ? {
-      enabled: cleanMode === 'com',
-      llmA: { url: String(com.llmA?.url || '').trim(), model: String(com.llmA?.model || '').trim(), apiKeys: Array.isArray(com.llmA?.apiKeys) ? com.llmA.apiKeys.map(k=>String(k||'').trim()).filter(Boolean) : [] },
-      llmB: { url: String(com.llmB?.url || '').trim(), model: String(com.llmB?.model || '').trim(), apiKeys: Array.isArray(com.llmB?.apiKeys) ? com.llmB.apiKeys.map(k=>String(k||'').trim()).filter(Boolean) : [] }
-    } : null;
+    const cleanMode =
+      mode === 'com' ? 'com' : 'normal';
 
-    if (cleanMode === 'com' && (!cleanCom || !cleanCom.llmA.url || !cleanCom.llmA.model || !cleanCom.llmA.apiKeys.length || !cleanCom.llmB.url || !cleanCom.llmB.model || !cleanCom.llmB.apiKeys.length)) {
-      return res.status(400).json({ ok:false, error:'COM mode requires URL, model and at least one API key for both LLM A and LLM B' });
+    const cleanCom =
+      com && typeof com === 'object'
+        ? {
+            enabled: cleanMode === 'com',
+            llmA: {
+              url: String(com.llmA?.url || '').trim(),
+              model: String(com.llmA?.model || '').trim(),
+              apiKeys: Array.isArray(com.llmA?.apiKeys)
+                ? [...new Set(com.llmA.apiKeys.map(k => String(k || '').trim()).filter(Boolean))]
+                : []
+            },
+            llmB: {
+              url: String(com.llmB?.url || '').trim(),
+              model: String(com.llmB?.model || '').trim(),
+              apiKeys: Array.isArray(com.llmB?.apiKeys)
+                ? [...new Set(com.llmB.apiKeys.map(k => String(k || '').trim()).filter(Boolean))]
+                : []
+            }
+          }
+        : null;
+
+    if (
+      cleanMode === 'com' &&
+      (
+        !cleanCom ||
+        !cleanCom.llmA.url ||
+        !cleanCom.llmA.model ||
+        !cleanCom.llmA.apiKeys.length ||
+        !cleanCom.llmB.url ||
+        !cleanCom.llmB.model ||
+        !cleanCom.llmB.apiKeys.length
+      )
+    ) {
+      return res.status(400).json({
+        ok: false,
+        error:
+          'COM mode requires endpoint, model and at least one API key for both LLM A and LLM B'
+      });
     }
 
 
@@ -238,7 +272,14 @@ async function updateBatchConfig(
 
     };
 
-    if (cleanCom) setFields.com = cleanCom;
+    if (cleanCom) {
+      setFields.com = cleanCom;
+    } else if (cleanMode === 'normal') {
+      setFields.com = {
+        ...(batch.com || {}),
+        enabled: false
+      };
+    }
 
     if (cleanApiKeys.length) {
       setFields.llmApiKeys = cleanApiKeys;
