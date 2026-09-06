@@ -716,7 +716,7 @@ Duplicates are automatically removed.
 <textarea id="systemPrompt"></textarea>
 
 <label>Audit Mode</label>
-<select id="batchMode">
+<select id="auditMode">
   <option value="normal">Normal — existing single LLM</option>
   <option value="com">COM — dual auditor cross-review</option>
 </select>
@@ -1209,7 +1209,7 @@ const resumeBtn = $('resumeBtn');
 const updateBatchConfigBtn =
   $('updateBatchConfigBtn');
 
-const batchMode = $('batchMode');
+const auditMode = $('auditMode');
 const comLlmAUrl = $('comLlmAUrl');
 const comLlmAModel = $('comLlmAModel');
 const comLlmAKeys = $('comLlmAKeys');
@@ -1261,7 +1261,7 @@ systemPrompt.value =
   localStorage.getItem('auditor_prompt') ||
   DEFAULT_PROMPT;
 
-batchMode.value = localStorage.getItem('auditor_batch_mode') || 'normal';
+auditMode.value = localStorage.getItem('auditor_batch_mode') || 'normal';
 comLlmAUrl.value = localStorage.getItem('auditor_com_a_url') || '';
 comLlmAModel.value = localStorage.getItem('auditor_com_a_model') || '';
 comLlmAKeys.value = localStorage.getItem('auditor_com_a_keys') || '';
@@ -2522,7 +2522,7 @@ updateBatchConfigBtn.onclick =
       const newEtherscanKey =
         etherscanKey.value.trim();
 
-      const selectedBatchMode = batchMode.value === 'com' ? 'com' : 'normal';
+      const selectedBatchMode = auditMode.value === 'com' ? 'com' : 'normal';
       const splitKeys = value => String(value || '').split(',').map(k => k.trim()).filter(Boolean);
       const comConfig = {
         enabled: selectedBatchMode === 'com',
