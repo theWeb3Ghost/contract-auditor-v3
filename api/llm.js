@@ -362,12 +362,19 @@ async function runLLMAudit({
   // ENDPOINT
   // ----------------------------------------------------------
 
-  const endpoint =
-    llmUrl &&
-    typeof llmUrl === 'string' &&
-    /^https?:\/\//i.test(llmUrl)
-      ? llmUrl
-      : 'https://api.openai.com/v1/chat/completions';
+  if (!llmUrl || typeof llmUrl !== 'string' || !/^https?:\/\//i.test(llmUrl.trim())) {
+    const error = new Error('LLM API URL is required and must be a valid http(s) URL');
+    error.code = 'INVALID_LLM_URL';
+    throw error;
+  }
+
+  if (!model || typeof model !== 'string' || !model.trim()) {
+    const error = new Error('LLM model is required');
+    error.code = 'NO_MODEL';
+    throw error;
+  }
+
+  const endpoint = llmUrl.trim();
 
 
   // ----------------------------------------------------------

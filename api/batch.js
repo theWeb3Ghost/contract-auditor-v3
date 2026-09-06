@@ -2144,9 +2144,7 @@ async function fetchContractSource({
   etherscanKey
 }) {
 
-  const apiKey =
-    etherscanKey ||
-    process.env.ETHERSCAN_API_KEY;
+  const apiKey = etherscanKey;
 
   if (!apiKey) {
     throw new Error(
@@ -2427,42 +2425,6 @@ async function fetchContractSource({
       implementationAddress
   };
   }
-
-// ============================================================
-// BUILD PERSISTED COM RESULT
-// ============================================================
-//
-// The normal report endpoint expects item.audit. COM keeps the
-// four phase results separately in item.com, but also stores a
-// deterministic combined report string once all four checkpoints
-// are complete.
-// ============================================================
-
-function buildComAuditResult(com) {
-  const a1 = com?.llmA?.initial?.result || '';
-  const b1 = com?.llmB?.initial?.result || '';
-  const a2 = com?.llmA?.final?.result || '';
-  const b2 = com?.llmB?.final?.result || '';
-
-  return [
-    '# COM AUDIT — LLM A INITIAL',
-    '',
-    a1,
-    '',
-    '# COM AUDIT — LLM B INITIAL',
-    '',
-    b1,
-    '',
-    '# COM AUDIT — LLM A CROSS-REVIEW',
-    '',
-    a2,
-    '',
-    '# COM AUDIT — LLM B CROSS-REVIEW',
-    '',
-    b2
-  ].join('\\n');
-}
-
 
 // ============================================================
 // PROCESS ONE ITEM
@@ -2749,12 +2711,6 @@ if (batch.mode === 'com' && batch.com?.enabled) {
       await items.updateOne({ _id: item._id }, { $set: {
         com,
         status: com.status === 'complete' ? 'completed' : 'running',
-        ...(com.status === 'complete'
-          ? {
-              audit: buildComAuditResult(com),
-              comCompletedAt: now()
-            }
-          : {}),
         contractName: contract.contractName,
         compilerVersion: contract.compilerVersion,
         implementation: contract.implementation || null,
@@ -3206,41 +3162,24 @@ async function startBatchWorker(
     }
 
 
-    // Claim only a queued batch. This prevents a Pause request that
-    // races with worker startup from being overwritten back to
-    // "running".
-    const claim =
-      await batches.updateOne(
-        {
-          batchId,
-          status: 'queued'
-        },
-        {
-          $set: {
-            status: 'running',
-            updatedAt: now(),
-            lastError: null
-          }
+    await batches.updateOne(
+      {
+        batchId
+      },
+      {
+        $set: {
+
+          status:
+            'running',
+
+          updatedAt:
+            now(),
+
+          lastError:
+            null
         }
-      );
-
-    if (!claim.matchedCount) {
-      const current =
-        await batches.findOne({ batchId });
-
-      if (
-        !current ||
-        [
-          'paused',
-          'paused_rate_limit',
-          'paused_quota',
-          'cancelled',
-          'completed'
-        ].includes(current.status)
-      ) {
-        return;
       }
-    }
+    );
 
 
     while (true) {
@@ -3385,21 +3324,13 @@ async function startBatchWorker(
 
         if (
           outcome.status ===
-            'failed'
-        ) {
-
-          updates.failed =
-            (batch.failed || 0) +
-            1;
-        }
-
-        if (
+            'failed' ||
           outcome.status ===
             'skipped'
         ) {
 
-          updates.skipped =
-            (batch.skipped || 0) +
+          updates.failed =
+            (batch.failed || 0) +
             1;
         }
 
@@ -3620,8 +3551,7 @@ async function createBatch(
   res
 ) {
 
-  try {
-
+  try { 
     const {
       addresses,
       rawInput,
@@ -3630,103 +3560,63 @@ async function createBatch(
       model,
       llmUrl,
       mode,
-      executionMode,
       com
-    } =
-      req.body || {};
+    } = req.body || {};
 
+    const cleanMode = mode === 'com' ? 'com' : 'normal';
+    const cleanCom = com && typeof com === 'object' ? {
+      enabled: cleanMode === 'com',
+      llmA: {
+        url: String(com.llmA?.url || '').trim(),
+        model: String(com.llmA?.model || '').trim(),
+        apiKeys: Array.isArray(com.llmA?.apiKeys)
+          ? [...new Set(com.llmA.apiKeys.map(k => String(k || '').trim()).filter(Boolean))]
+          : []
+      },
+      llmB: {
+        url: String(com.llmB?.url || '').trim(),
+        model: String(com.llmB?.model || '').trim(),
+        apiKeys: Array.isArray(com.llmB?.apiKeys)
+          ? [...new Set(com.llmB.apiKeys.map(k => String(k || '').trim()).filter(Boolean))]
+          : []
+      }
+    } : null;
 
+    // LLM credentials MUST come from the frontend settings for the
+    // selected audit engine. There is intentionally no server-key fallback.
     const rawLLMKeys =
-  req.headers['x-openai-keys'] ||
-  req.headers['x-openai-key'] ||
-  process.env.LLM_API_KEYS ||
-  process.env.OPENAI_API_KEY ||
-  '';
+      req.headers['x-openai-keys'] ||
+      req.headers['x-openai-key'] ||
+      '';
 
-const llmKeys =
-  String(rawLLMKeys)
-    .split(',')
-    .map(key => key.trim())
-    .filter(Boolean);
+    const llmKeys = String(rawLLMKeys)
+      .split(',')
+      .map(key => key.trim())
+      .filter(Boolean);
 
-if (!llmKeys.length) {
-  return res
-    .status(400)
-    .json({
-      error:
-        'At least one LLM API key is required'
-    });
-}
-
-    const auditMode =
-      mode === 'com' ? 'com' : 'normal';
-
-    const targetMode =
-      executionMode === 'batch' ? 'batch' : 'single';
-
-    const cleanCom =
-      com && typeof com === 'object'
-        ? {
-            enabled: auditMode === 'com',
-            llmA: {
-              url: String(com.llmA?.url || '').trim(),
-              model: String(com.llmA?.model || '').trim(),
-              apiKeys: Array.isArray(com.llmA?.apiKeys)
-                ? [...new Set(com.llmA.apiKeys.map(k => String(k || '').trim()).filter(Boolean))]
-                : []
-            },
-            llmB: {
-              url: String(com.llmB?.url || '').trim(),
-              model: String(com.llmB?.model || '').trim(),
-              apiKeys: Array.isArray(com.llmB?.apiKeys)
-                ? [...new Set(com.llmB.apiKeys.map(k => String(k || '').trim()).filter(Boolean))]
-                : []
-            }
-          }
-        : {
-            enabled: false,
-            llmA: { url: '', model: '', apiKeys: [] },
-            llmB: { url: '', model: '', apiKeys: [] }
-          };
-
-    if (
-      auditMode === 'com' &&
-      (
-        !cleanCom.llmA.url ||
-        !cleanCom.llmA.model ||
-        !cleanCom.llmA.apiKeys.length ||
-        !cleanCom.llmB.url ||
-        !cleanCom.llmB.model ||
-        !cleanCom.llmB.apiKeys.length
-      )
-    ) {
+    if (cleanMode === 'normal' && (!String(llmUrl || '').trim() || !String(model || '').trim() || !llmKeys.length)) {
       return res.status(400).json({
-        error:
-          'COM mode requires endpoint, model and at least one API key for both LLM A and LLM B'
+        error: 'Normal mode requires URL, model and at least one API key from Normal settings'
       });
     }
 
-
-    const etherscanKey =
-      req.headers[
-        'x-etherscan-key'
-      ] ||
-      process.env.ETHERSCAN_API_KEY;
-
-
-  
-
-
-    if (!etherscanKey) {
-
-      return res
-        .status(400)
-        .json({
-          error:
-            'Etherscan API key is required'
-        });
+    if (cleanMode === 'com' && (
+      !cleanCom ||
+      !cleanCom.llmA.url || !cleanCom.llmA.model || !cleanCom.llmA.apiKeys.length ||
+      !cleanCom.llmB.url || !cleanCom.llmB.model || !cleanCom.llmB.apiKeys.length
+    )) {
+      return res.status(400).json({
+        error: 'COM mode requires URL, model and at least one API key for both LLM A and LLM B from COM settings'
+      });
     }
 
+    const etherscanKey = req.headers['x-etherscan-key'] || '';
+
+    if (!etherscanKey) {
+      return res.status(400).json({
+        error: 'Etherscan API key is required from the frontend settings'
+      });
+    }
 
     if (!systemPrompt) {
 
@@ -3804,37 +3694,30 @@ if (!llmKeys.length) {
       failed:
         0,
 
-      skipped:
-        0,
-
-      // Audit engine is immutable while the worker is running.
-      // It may only be changed explicitly through the paused-batch
-      // configuration route.
       mode:
-        auditMode,
-
-      // Execution type is independent from the audit engine.
-      executionMode:
-        targetMode,
+        cleanMode,
 
       com:
-        cleanCom,
+        cleanCom || {
+          enabled: false,
+          llmA: { url: '', model: '', apiKeys: [] },
+          llmB: { url: '', model: '', apiKeys: [] }
+        },
 
       model:
-        model ||
-        'gpt-4o-mini',
+        cleanMode === 'normal' ? String(model || '').trim() : '',
 
       systemPrompt,
 
       llmUrl:
-        llmUrl ||
-        'https://api.openai.com/v1/chat/completions',
+        cleanMode === 'normal' ? String(llmUrl || '').trim() : '',
 
       // Retained for the current personal-tool architecture.
       // Do not use this storage approach for a public multi-user
       // production application.
      llmApiKeys:
-        llmKeys,
+
+       cleanMode === 'normal' ? llmKeys : [],
 
       etherscanKey:
         etherscanKey,
@@ -3983,15 +3866,6 @@ async function getBatch(
                 0,
 
               systemPrompt:
-                0,
-
-              llmApiKeys:
-                0,
-
-              'com.llmA.apiKeys':
-                0,
-
-              'com.llmB.apiKeys':
                 0
             }
           }
@@ -4036,24 +3910,6 @@ async function getBatch(
                   0,
 
                 audit:
-                  0,
-
-                'com.llmA.apiKeys':
-                  0,
-
-                'com.llmA.initial.result':
-                  0,
-
-                'com.llmA.final.result':
-                  0,
-
-                'com.llmB.initial.result':
-                  0,
-
-                'com.llmB.final.result':
-                  0,
-
-                'com.llmB.apiKeys':
                   0
               }
             }
@@ -4495,9 +4351,6 @@ async function restartBatch(
           audit:
             null,
 
-          com:
-            null,
-
           truncated:
             false,
 
@@ -4532,9 +4385,6 @@ async function restartBatch(
             0,
 
           failed:
-            0,
-
-          skipped:
             0,
 
           restartedAt:
@@ -4750,28 +4600,9 @@ async function downloadReport(
     }
 
 
-    const dbBatch =
-      await db
-        .collection('batches')
-        .findOne(
-          { batchId: item.batchId },
-          {
-            projection: {
-              mode: 1,
-              executionMode: 1
-            }
-          }
-        );
-
     const report = `# SMART CONTRACT SECURITY AUDIT REPORT
 
 Generated: ${item.finishedAt || new Date().toISOString()}
-
-## Audit Configuration
-
-Execution: ${(dbBatch?.executionMode || 'batch').toUpperCase()}
-
-Audit Engine: ${(dbBatch?.mode || 'normal').toUpperCase()}
 
 ## Contract Information
 
@@ -4787,33 +4618,7 @@ Implementation: ${item.implementation || 'N/A'}
 
 # AUDIT FINDINGS
 
-${item.audit || 'No audit result was stored.'}
-
-${
-  item.com
-    ? `
----
-
-# COM PHASE CHECKPOINTS
-
-## LLM A — Initial (A1)
-
-${item.com.llmA?.initial?.result || 'Not completed'}
-
-## LLM B — Initial (B1)
-
-${item.com.llmB?.initial?.result || 'Not completed'}
-
-## LLM A — Cross-Review (A2)
-
-${item.com.llmA?.final?.result || 'Not completed'}
-
-## LLM B — Cross-Review (B2)
-
-${item.com.llmB?.final?.result || 'Not completed'}
-`
-    : ''
-}
+${item.audit}
 
 ---
 

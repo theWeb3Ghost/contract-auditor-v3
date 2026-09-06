@@ -186,12 +186,15 @@ ${truncated
     // DETERMINE ENDPOINT
     // --------------------------------------------------------
 
-    const endpoint =
-      llmUrl &&
-      typeof llmUrl === 'string' &&
-      /^https?:\/\//.test(llmUrl)
-        ? llmUrl
-        : 'https://api.openai.com/v1/chat/completions';
+    if (!llmUrl || typeof llmUrl !== 'string' || !/^https?:\/\//.test(llmUrl.trim())) {
+      throw new Error('LLM API URL is required and must be supplied by the frontend');
+    }
+
+    const endpoint = llmUrl.trim();
+
+    if (!model || typeof model !== 'string' || !model.trim()) {
+      throw new Error('LLM model is required and must be supplied by the frontend');
+    }
 
 
     // --------------------------------------------------------
@@ -649,9 +652,7 @@ module.exports = async function auditHandler(req, res) {
     // GET API KEY
     // --------------------------------------------------------
 
-    const apiKey =
-      req.headers['x-openai-key'] ||
-      process.env.OPENAI_API_KEY;
+    const apiKey = req.headers['x-openai-key'];
 
 
     if (!apiKey) {

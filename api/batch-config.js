@@ -14,8 +14,6 @@ const {
 //   model
 //   systemPrompt
 //   llmUrl
-//   mode (audit engine)
-//   COM configuration
 //
 // It NEVER changes:
 //
@@ -83,88 +81,51 @@ async function updateBatchConfig(
         etherscanKey || ''
       ).trim();
 
-    const cleanMode =
-      mode === 'com' ? 'com' : 'normal';
-
-    const cleanCom =
-      com && typeof com === 'object'
-        ? {
-            enabled: cleanMode === 'com',
-            llmA: {
-              url: String(com.llmA?.url || '').trim(),
-              model: String(com.llmA?.model || '').trim(),
-              apiKeys: Array.isArray(com.llmA?.apiKeys)
-                ? [...new Set(com.llmA.apiKeys.map(k => String(k || '').trim()).filter(Boolean))]
-                : []
-            },
-            llmB: {
-              url: String(com.llmB?.url || '').trim(),
-              model: String(com.llmB?.model || '').trim(),
-              apiKeys: Array.isArray(com.llmB?.apiKeys)
-                ? [...new Set(com.llmB.apiKeys.map(k => String(k || '').trim()).filter(Boolean))]
-                : []
-            }
-          }
-        : null;
-
-    if (
-      cleanMode === 'com' &&
-      (
-        !cleanCom ||
-        !cleanCom.llmA.url ||
-        !cleanCom.llmA.model ||
-        !cleanCom.llmA.apiKeys.length ||
-        !cleanCom.llmB.url ||
-        !cleanCom.llmB.model ||
-        !cleanCom.llmB.apiKeys.length
-      )
-    ) {
-      return res.status(400).json({
-        ok: false,
-        error:
-          'COM mode requires endpoint, model and at least one API key for both LLM A and LLM B'
-      });
-    }
-
-
-    if (!cleanModel) {
-
-      return res
-        .status(400)
-        .json({
-          ok: false,
-          error:
-            'Model is required'
-        });
-
-    }
-
+    const cleanMode = mode === 'com' ? 'com' : 'normal';
+    const cleanCom = com && typeof com === 'object' ? {
+      enabled: cleanMode === 'com',
+      llmA: {
+        url: String(com.llmA?.url || '').trim(),
+        model: String(com.llmA?.model || '').trim(),
+        apiKeys: Array.isArray(com.llmA?.apiKeys)
+          ? [...new Set(com.llmA.apiKeys.map(k => String(k || '').trim()).filter(Boolean))]
+          : []
+      },
+      llmB: {
+        url: String(com.llmB?.url || '').trim(),
+        model: String(com.llmB?.model || '').trim(),
+        apiKeys: Array.isArray(com.llmB?.apiKeys)
+          ? [...new Set(com.llmB.apiKeys.map(k => String(k || '').trim()).filter(Boolean))]
+          : []
+      }
+    } : null;
 
     if (!cleanPrompt.trim()) {
-
-      return res
-        .status(400)
-        .json({
-          ok: false,
-          error:
-            'System prompt is required'
-        });
-
+      return res.status(400).json({ ok: false, error: 'System prompt is required' });
     }
 
-
-    if (!cleanLlmUrl) {
-
-      return res
-        .status(400)
-        .json({
-          ok: false,
-          error:
-            'LLM endpoint is required'
-        });
-
+    if (cleanMode === 'normal') {
+      if (!cleanModel) {
+        return res.status(400).json({ ok: false, error: 'Normal model is required' });
+      }
+      if (!cleanLlmUrl) {
+        return res.status(400).json({ ok: false, error: 'Normal LLM endpoint is required' });
+      }
+      if (!cleanApiKeys.length) {
+        return res.status(400).json({ ok: false, error: 'Normal mode requires at least one API key from Normal settings' });
+      }
     }
 
+    if (cleanMode === 'com' && (
+      !cleanCom ||
+      !cleanCom.llmA.url || !cleanCom.llmA.model || !cleanCom.llmA.apiKeys.length ||
+      !cleanCom.llmB.url || !cleanCom.llmB.model || !cleanCom.llmB.apiKeys.length
+    )) {
+      return res.status(400).json({
+        ok: false,
+        error: 'COM mode requires URL, model and at least one API key for both LLM A and LLM B from COM settings'
+      });
+    }
 
     // ----------------------------------------------------------
     // DATABASE
@@ -272,14 +233,7 @@ async function updateBatchConfig(
 
     };
 
-    if (cleanCom) {
-      setFields.com = cleanCom;
-    } else if (cleanMode === 'normal') {
-      setFields.com = {
-        ...(batch.com || {}),
-        enabled: false
-      };
-    }
+    if (cleanCom) setFields.com = cleanCom;
 
     if (cleanApiKeys.length) {
       setFields.llmApiKeys = cleanApiKeys;
