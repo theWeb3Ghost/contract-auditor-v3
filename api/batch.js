@@ -2683,8 +2683,8 @@ if (batch.mode === 'com' && batch.com?.enabled) {
     // Key choice is independent, while normal rate learning remains untouched.
     let lastError;
     for (const apiKey of keys) {
-      try {
-        return await runLLMAudit({
+            try {
+        const audit = await runLLMAudit({
           source: contract.source,
           systemPrompt: batch.systemPrompt,
           model: cfg.model,
@@ -2694,6 +2694,7 @@ if (batch.mode === 'com' && batch.com?.enabled) {
           apiKey,
           additionalContext
         });
+        return audit.result;
       } catch (error) {
         lastError = error;
         const code = String(error?.code || '').toUpperCase();
