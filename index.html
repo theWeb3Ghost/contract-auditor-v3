@@ -715,13 +715,17 @@ Duplicates are automatically removed.
 
 <textarea id="systemPrompt"></textarea>
 
-<label>Audit Mode</label>
-<select id="auditMode">
-  <option value="normal">Normal — existing single LLM</option>
-  <option value="com">COM — dual auditor cross-review</option>
+<label>Audit Engine</label>
+<div class="mode-row" id="auditEngineRow">
+  <button type="button" id="normalAuditMode">Normal</button>
+  <button type="button" id="comAuditMode">COM</button>
+</div>
+<select id="auditMode" class="hidden" aria-hidden="true" tabindex="-1">
+  <option value="normal">Normal</option>
+  <option value="com">COM</option>
 </select>
 
-<div id="comSettings" style="margin-top:14px;padding:12px;border:1px solid var(--border);border-radius:10px">
+<div id="comSettings" class="hidden" style="margin-top:14px;padding:12px;border:1px solid var(--border);border-radius:10px">
   <h3>🤝 COM Dual-Auditor Settings</h3>
   <p class="hint">Phase 1 runs both auditors together. After both finish, Phase 2 runs both cross-reviews together. Each result is checkpointed immediately.</p>
   <label>LLM A Endpoint</label><input id="comLlmAUrl" placeholder="https://.../chat/completions" />
@@ -739,7 +743,7 @@ Duplicates are automatically removed.
   id="startBtn"
   class="primary"
 >
-Start Audit
+Start Normal Audit
 </button>
 
 <!-- CONTRACT NAME SKIP LIST -->
@@ -831,7 +835,7 @@ Start Audit
   style="margin-top:16px"
 >
 
-<h2>Batch Progress</h2>
+<h2 id="progressTitle">Audit Progress</h2>
 
 <div>
 
@@ -844,6 +848,20 @@ Batch ID:
 
 </div>
 
+<div
+  id="batchExecutionInfo"
+  style="margin-top:10px;color:var(--text-dim);font-size:.82rem"
+>
+  Execution: —
+  <span style="margin:0 6px">•</span>
+  Audit Engine: —
+</div>
+
+<div
+  id="comProgress"
+  class="hidden"
+  style="margin-top:12px;padding:10px;border:1px solid var(--border);border-radius:8px;font-size:.78rem"
+></div>
 
 <div
   id="batchStatus"
@@ -949,7 +967,7 @@ Total
   class="secondary"
   type="button"
 >
-  Apply Model / Prompt
+  Apply Paused Configuration
 </button>
 
 <button
@@ -1210,6 +1228,12 @@ const updateBatchConfigBtn =
   $('updateBatchConfigBtn');
 
 const auditMode = $('auditMode');
+const normalAuditMode = $('normalAuditMode');
+const comAuditMode = $('comAuditMode');
+const comSettings = $('comSettings');
+const batchExecutionInfo = $('batchExecutionInfo');
+const progressTitle = $('progressTitle');
+const comProgress = $('comProgress');
 const comLlmAUrl = $('comLlmAUrl');
 const comLlmAModel = $('comLlmAModel');
 const comLlmAKeys = $('comLlmAKeys');
@@ -1270,6 +1294,10 @@ comLlmBModel.value = localStorage.getItem('auditor_com_b_model') || '';
 comLlmBKeys.value = localStorage.getItem('auditor_com_b_keys') || '';
 
 
+// Apply saved engine state after all elements exist.
+setAuditEngine(auditMode.value);
+
+
 // ============================================================
 // SAVE SETTINGS
 // ============================================================
@@ -1297,6 +1325,42 @@ comLlmBKeys.value = localStorage.getItem('auditor_com_b_keys') || '';
   );
 
 });
+
+// Persist the audit-engine configuration separately from the
+// execution target (Single/Batch).
+[
+  [auditMode, 'auditor_batch_mode'],
+  [comLlmAUrl, 'auditor_com_a_url'],
+  [comLlmAModel, 'auditor_com_a_model'],
+  [comLlmAKeys, 'auditor_com_a_keys'],
+  [comLlmBUrl, 'auditor_com_b_url'],
+  [comLlmBModel, 'auditor_com_b_model'],
+  [comLlmBKeys, 'auditor_com_b_keys']
+].forEach(([element, key]) => {
+  element.addEventListener('input', () => {
+    localStorage.setItem(key, element.value);
+  });
+});
+
+
+// ============================================================
+// AUDIT ENGINE UI
+// ============================================================
+
+function setAuditEngine(value) {
+  const next = value === 'com' ? 'com' : 'normal';
+  auditMode.value = next;
+  localStorage.setItem('auditor_batch_mode', next);
+
+  normalAuditMode.classList.toggle('active', next === 'normal');
+  comAuditMode.classList.toggle('active', next === 'com');
+  comSettings.classList.toggle('hidden', next !== 'com');
+
+  updateStartButton();
+}
+
+normalAuditMode.onclick = () => setAuditEngine('normal');
+comAuditMode.onclick = () => setAuditEngine('com');
 
 
 // ============================================================
@@ -1806,6 +1870,7 @@ singleMode.onclick = () => {
 
   singlePane.classList.remove('hidden');
   batchPane.classList.add('hidden');
+  updateStartButton();
 
 };
 
@@ -1819,8 +1884,23 @@ batchMode.onclick = () => {
 
   singlePane.classList.add('hidden');
   batchPane.classList.remove('hidden');
+  updateStartButton();
 
 };
+
+
+// ============================================================
+// START BUTTON LABEL
+// ============================================================
+
+function updateStartButton() {
+  const engine = auditMode.value === 'com' ? 'COM' : 'Normal';
+  const target = mode === 'batch' ? 'Batch' : 'Audit';
+  startBtn.textContent =
+    mode === 'batch'
+      ? `Start ${engine} Batch`
+      : `Start ${engine} Audit`;
+}
 
 
 // ============================================================
@@ -1865,147 +1945,179 @@ startBtn.onclick = async () => {
 
     startBtn.disabled = true;
 
+    const selectedAuditMode =
+      auditMode.value === 'com' ? 'com' : 'normal';
 
-    const llmKeys = openaiKey.value.split(',').map(key=> key.trim()).filter(Boolean);
-    if (!llmKeys.length) { throw new Error ('Enter at least one LLM API key');}
+    const splitKeys = value =>
+      String(value || '')
+        .split(',')
+        .map(key => key.trim())
+        .filter(Boolean);
 
+    const normalKeys = splitKeys(openaiKey.value);
+
+    const comConfig = {
+      enabled: selectedAuditMode === 'com',
+      llmA: {
+        url: comLlmAUrl.value.trim(),
+        model: comLlmAModel.value.trim(),
+        apiKeys: splitKeys(comLlmAKeys.value)
+      },
+      llmB: {
+        url: comLlmBUrl.value.trim(),
+        model: comLlmBModel.value.trim(),
+        apiKeys: splitKeys(comLlmBKeys.value)
+      }
+    };
+
+    if (selectedAuditMode === 'normal' && !normalKeys.length) {
+      throw new Error('Enter at least one LLM API key');
+    }
 
     if (
-      !etherscanKey.value.trim()
+      selectedAuditMode === 'com' &&
+      (
+        !comConfig.llmA.url ||
+        !comConfig.llmA.model ||
+        !comConfig.llmA.apiKeys.length ||
+        !comConfig.llmB.url ||
+        !comConfig.llmB.model ||
+        !comConfig.llmB.apiKeys.length
+      )
     ) {
       throw new Error(
-        'Enter your Etherscan API key'
+        'COM mode requires endpoint, model and at least one API key for both LLM A and LLM B.'
       );
     }
 
+    if (!etherscanKey.value.trim()) {
+      throw new Error('Enter your Etherscan API key');
+    }
+
+    if (!model.value.trim()) {
+      throw new Error('Enter an LLM model');
+    }
+
+    if (!systemPrompt.value.trim()) {
+      throw new Error('Enter a system prompt');
+    }
+
+    if (!llmUrl.value.trim()) {
+      throw new Error('Enter an LLM endpoint');
+    }
 
     if (mode === 'single') {
 
-      const address =
-        singleAddress.value.trim();
-
+      const address = singleAddress.value.trim();
 
       if (!address) {
-        throw new Error(
-          'Enter a contract address'
-        );
+        throw new Error('Enter a contract address');
       }
 
-
-      batchInput.value =
-        address;
-
+      batchInput.value = address;
     }
 
-
-    const rawInput =
-      batchInput.value.trim();
-
+    const rawInput = batchInput.value.trim();
 
     if (!rawInput) {
-
-      throw new Error(
-        'Enter or upload addresses'
-      );
-
+      throw new Error('Enter or upload addresses');
     }
 
+    // The persistent batch engine is used for both Single and Batch.
+    // executionMode tells the dashboard/report which target mode was
+    // actually created, while mode remains the audit engine.
+    const response = await fetch(
+      `${apiBase()}/api/batch`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-openai-keys':
+            selectedAuditMode === 'normal'
+              ? normalKeys.join(',')
+              : comConfig.llmA.apiKeys.join(','),
+          'x-etherscan-key':
+            etherscanKey.value.trim()
+        },
+        body: JSON.stringify({
+          rawInput,
+          chainId: chain.value,
+          model: model.value.trim(),
+          systemPrompt: systemPrompt.value,
+          llmUrl: llmUrl.value.trim(),
+          mode: selectedAuditMode,
+          executionMode: mode,
+          com: comConfig
+        })
+      }
+    );
 
-    const response =
-      await fetch(
-        `${apiBase()}/api/batch`,
-        {
-          method: 'POST',
-
-          headers: {
-            'Content-Type':
-              'application/json',
-
-            'x-openai-keys':
-              llmKeys.join(','),
-
-            'x-etherscan-key':
-              etherscanKey.value.trim()
-          },
-
-          body: JSON.stringify({
-
-            rawInput,
-
-            chainId:
-              chain.value,
-
-            model:
-              model.value.trim(),
-
-            systemPrompt:
-              systemPrompt.value,
-
-            llmUrl:
-              llmUrl.value.trim()
-
-          })
-        }
-      );
-
-
-    const data =
-      await response.json();
-
+    const data = await response.json();
 
     if (!response.ok) {
-
       throw new Error(
-        data.error ||
-        'Could not start batch'
+        data.error || 'Could not start audit'
       );
-
     }
 
-
-    currentBatchId =
-      data.batchId;
-
+    currentBatchId = data.batchId;
 
     localStorage.setItem(
       'contract_auditor_active_batch',
       currentBatchId
     );
 
-
-    dashboard.classList.remove(
-      'hidden'
+    // Persist the exact configuration used to create this run.
+    localStorage.setItem(
+      'auditor_batch_mode',
+      selectedAuditMode
+    );
+    localStorage.setItem(
+      'auditor_com_a_url',
+      comConfig.llmA.url
+    );
+    localStorage.setItem(
+      'auditor_com_a_model',
+      comConfig.llmA.model
+    );
+    localStorage.setItem(
+      'auditor_com_a_keys',
+      comLlmAKeys.value
+    );
+    localStorage.setItem(
+      'auditor_com_b_url',
+      comConfig.llmB.url
+    );
+    localStorage.setItem(
+      'auditor_com_b_model',
+      comConfig.llmB.model
+    );
+    localStorage.setItem(
+      'auditor_com_b_keys',
+      comLlmBKeys.value
     );
 
-    resultsPanel.classList.remove(
-      'hidden'
-    );
+    dashboard.classList.remove('hidden');
+    resultsPanel.classList.remove('hidden');
 
-
-    batchIdEl.textContent =
-      currentBatchId;
-
+    batchIdEl.textContent = currentBatchId;
 
     await refreshBatch();
-
-
     startPolling();
-
 
   } catch (error) {
 
-    alert(
-      error.message ||
-      String(error)
-    );
+    alert(error.message || String(error));
 
   } finally {
 
     startBtn.disabled = false;
+    updateStartButton();
 
   }
 
 };
+
 
 
 // ============================================================
@@ -2078,6 +2190,61 @@ function renderBatch(batch) {
   batchIdEl.textContent =
     batch.batchId;
 
+  const executionLabel =
+    batch.executionMode === 'single'
+      ? 'SINGLE'
+      : 'BATCH';
+
+  const engineLabel =
+    batch.mode === 'com'
+      ? 'COM'
+      : 'NORMAL';
+
+  batchExecutionInfo.innerHTML =
+    `Execution: <strong>${executionLabel}</strong>` +
+    `<span style="margin:0 6px">•</span>` +
+    `Audit Engine: <strong>${engineLabel}</strong>`;
+
+  progressTitle.textContent =
+    executionLabel === 'BATCH'
+      ? 'Batch Progress'
+      : 'Single Audit Progress';
+
+  const activeComItem =
+    (batch.items || []).find(item =>
+      batch.mode === 'com' &&
+      ['pending', 'running'].includes(item.status) &&
+      item.com
+    );
+
+  if (batch.mode === 'com' && activeComItem?.com) {
+    const c = activeComItem.com;
+    const phase =
+      c.status === 'phase2'
+        ? 'Phase 2 — Cross-review'
+        : 'Phase 1 — Independent audits';
+
+    const stateLabel = value =>
+      value?.status === 'complete'
+        ? '✓ Complete'
+        : value?.status === 'running'
+          ? '⏳ Running'
+          : 'Pending';
+
+    comProgress.classList.remove('hidden');
+    comProgress.innerHTML =
+      `<strong>COM Progress — #${Number(activeComItem.index) + 1}</strong>` +
+      `<div style="margin-top:8px">${phase}</div>` +
+      `<div style="margin-top:6px">` +
+      `LLM A: A1 ${stateLabel(c.llmA?.initial)} · A2 ${stateLabel(c.llmA?.final)}` +
+      `</div>` +
+      `<div style="margin-top:4px">` +
+      `LLM B: B1 ${stateLabel(c.llmB?.initial)} · B2 ${stateLabel(c.llmB?.final)}` +
+      `</div>`;
+  } else {
+    comProgress.classList.add('hidden');
+    comProgress.innerHTML = '';
+  }
 
   const status =
     batch.status || 'unknown';
@@ -2208,9 +2375,13 @@ const readableStatus =
     ![
       'paused',
       'paused_rate_limit',
+      'paused_quota',
       'interrupted'
     ]
     .includes(status);
+
+  resumeBtn.textContent =
+    `▶ Continue ${engineLabel.charAt(0) + engineLabel.slice(1).toLowerCase()} ${executionLabel.charAt(0) + executionLabel.slice(1).toLowerCase()}`;
   updateBatchConfigBtn.disabled =
   ![
     'paused',
@@ -2346,6 +2517,24 @@ function renderItems(items) {
 
     `;
 
+
+    if (
+      item.com &&
+      typeof item.com === 'object'
+    ) {
+      const c = item.com;
+      const phaseLine =
+        `A1 ${c.llmA?.initial?.status === 'complete' ? '✓' : '·'} ` +
+        `A2 ${c.llmA?.final?.status === 'complete' ? '✓' : '·'} · ` +
+        `B1 ${c.llmB?.initial?.status === 'complete' ? '✓' : '·'} ` +
+        `B2 ${c.llmB?.final?.status === 'complete' ? '✓' : '·'}`;
+
+      const phaseEl = document.createElement('div');
+      phaseEl.style.cssText =
+        'margin-top:6px;color:var(--text-dim);font-size:.72rem';
+      phaseEl.textContent = `COM: ${phaseLine}`;
+      row.appendChild(phaseEl);
+    }
 
     if (
       status === 'completed'
@@ -2568,8 +2757,10 @@ updateBatchConfigBtn.onclick =
 
       const confirmed =
         confirm(
-          'Update this paused batch to the current Model / Prompt settings?\n\n' +
-          `Model:\n${newModel}\n\n` +
+          'Update this paused run to the current configuration?\n\n' +
+          `Execution: ${mode === 'batch' ? 'BATCH' : 'SINGLE'}\n` +
+          `Audit Engine: ${selectedBatchMode.toUpperCase()}\n` +
+          `Model: ${newModel}\n\n` +
           'Your existing completed contracts and progress will NOT be reset.'
         );
 
