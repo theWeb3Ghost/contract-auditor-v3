@@ -23,6 +23,10 @@ const {
   updateBatchConfig
 } = require('./batch-config');
 
+const {
+  runComBatchItem
+} = require('./com');
+
 
 // ============================================================
 // CONFIGURATION
@@ -185,6 +189,12 @@ function getConfiguredLLMKeys(batch) {
     )
 
   ];
+}
+
+
+function getConfiguredKeysFrom(config) {
+  if (!Array.isArray(config?.apiKeys)) return [];
+  return [...new Set(config.apiKeys.map(k => String(k || '').trim()).filter(Boolean))];
 }
 
 
@@ -2659,6 +2669,66 @@ if (
 
 
 // ==========================================================
+// COM DUAL-AUDITOR MODE
+// ==========================================================
+if (batch.mode === 'com' && batch.com?.enabled) {
+  const runComAudit = async (side, additionalContext) => {
+    const cfg = batch.com?.[side];
+    const keys = getConfiguredKeysFrom(cfg);
+    if (!cfg?.url || !cfg?.model || !keys.length) {
+      const error = new Error(`COM ${side} is not fully configured`);
+      error.code = 'COM_CONFIG_INVALID';
+      throw error;
+    }
+
+    // COM requests intentionally run concurrently across auditors.
+    // Key choice is independent, while normal rate learning remains untouched.
+    let lastError;
+    for (const apiKey of keys) {
+      try {
+        return await runLLMAudit({
+          source: contract.source,
+          systemPrompt: batch.systemPrompt,
+          model: cfg.model,
+          contractName: contract.contractName,
+          address,
+          llmUrl: cfg.url,
+          apiKey,
+          additionalContext
+        });
+      } catch (error) {
+        lastError = error;
+        const code = String(error?.code || '').toUpperCase();
+        if (!['RATE_LIMIT','QUOTA','INVALID_KEY','PROVIDER_ERROR','EMPTY_RESPONSE'].includes(code)) throw error;
+      }
+    }
+    throw lastError || new Error(`COM ${side} failed`);
+  };
+
+  const outcome = await runComBatchItem({
+    item,
+    contract,
+    runAudit: runComAudit,
+    checkpoint: async com => {
+      await items.updateOne({ _id: item._id }, { $set: {
+        com,
+        status: com.status === 'complete' ? 'completed' : 'running',
+        contractName: contract.contractName,
+        compilerVersion: contract.compilerVersion,
+        implementation: contract.implementation || null,
+        isProxy: contract.isProxy || false,
+        auditedAddress: contract.auditedAddress || address,
+        updatedAt: now(),
+        ...(com.status === 'complete' ? { finishedAt: now() } : {})
+      }});
+    }
+  });
+
+  return outcome;
+}
+
+
+// ==========================================================
 // LLM AUDIT
 // ==========================================================
 
@@ -3227,6 +3297,12 @@ async function startBatchWorker(
           );
 
 
+        // A non-terminal COM outcome must never advance progress.
+        if (outcome && outcome.terminal === false) {
+          await sleep(250);
+          continue;
+        }
+
         const updates = {
 
           currentIndex:
@@ -3609,6 +3685,15 @@ if (!llmKeys.length) {
 
       failed:
         0,
+
+      mode:
+        'normal',
+
+      com: {
+        enabled: false,
+        llmA: { url: '', model: '', apiKeys: [] },
+        llmB: { url: '', model: '', apiKeys: [] }
+      },
 
       model:
         model ||

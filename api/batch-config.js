@@ -39,7 +39,9 @@ async function updateBatchConfig(
       systemPrompt,
       llmUrl,
       llmApiKeys,
-      etherscanKey
+      etherscanKey,
+      mode,
+      com
     } = req.body || {};
 
 
@@ -78,6 +80,17 @@ async function updateBatchConfig(
       String(
         etherscanKey || ''
       ).trim();
+
+    const cleanMode = mode === 'com' ? 'com' : 'normal';
+    const cleanCom = com && typeof com === 'object' ? {
+      enabled: cleanMode === 'com',
+      llmA: { url: String(com.llmA?.url || '').trim(), model: String(com.llmA?.model || '').trim(), apiKeys: Array.isArray(com.llmA?.apiKeys) ? com.llmA.apiKeys.map(k=>String(k||'').trim()).filter(Boolean) : [] },
+      llmB: { url: String(com.llmB?.url || '').trim(), model: String(com.llmB?.model || '').trim(), apiKeys: Array.isArray(com.llmB?.apiKeys) ? com.llmB.apiKeys.map(k=>String(k||'').trim()).filter(Boolean) : [] }
+    } : null;
+
+    if (cleanMode === 'com' && (!cleanCom || !cleanCom.llmA.url || !cleanCom.llmA.model || !cleanCom.llmA.apiKeys.length || !cleanCom.llmB.url || !cleanCom.llmB.model || !cleanCom.llmB.apiKeys.length)) {
+      return res.status(400).json({ ok:false, error:'COM mode requires URL, model and at least one API key for both LLM A and LLM B' });
+    }
 
 
     if (!cleanModel) {
@@ -219,9 +232,13 @@ async function updateBatchConfig(
       configUpdatedAt:
         updatedAt,
 
-      updatedAt
+      updatedAt,
+
+      mode: cleanMode
 
     };
+
+    if (cleanCom) setFields.com = cleanCom;
 
     if (cleanApiKeys.length) {
       setFields.llmApiKeys = cleanApiKeys;
@@ -293,6 +310,10 @@ async function updateBatchConfig(
 
         llmUrl:
           cleanLlmUrl,
+
+        mode: cleanMode,
+
+        comConfigured: Boolean(cleanCom),
 
         // Never echo raw keys back to the client — just confirm
         // whether they were actually changed this call.

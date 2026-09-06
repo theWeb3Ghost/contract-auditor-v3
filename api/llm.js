@@ -296,7 +296,8 @@ async function runLLMAudit({
   contractName,
   address,
   llmUrl,
-  apiKey
+  apiKey,
+  additionalContext = ''
 }) {
 
   // ----------------------------------------------------------
@@ -389,6 +390,7 @@ ${
     ? '\nWARNING: Source code was truncated because it exceeded the configured source limit.\n'
     : ''
 }
+${additionalContext ? `\nADDITIONAL AUDIT CONTEXT:\n${String(additionalContext)}\n` : ''}
 `;
 
 
