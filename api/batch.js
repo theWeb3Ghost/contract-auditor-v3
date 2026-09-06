@@ -4600,14 +4600,20 @@ async function downloadReport(
         });
     }
 
-    let findingsSection;
+        let findingsSection;
 
-    // item.com is only ever written by the COM (two-auditor) pipeline.
-    // Normal-mode items don't have it, so this tells the two apart.
     if (item.com) {
 
-      const aResult = item.com?.llmA?.final?.result || null;
-      const bResult = item.com?.llmB?.final?.result || null;
+      const unwrapResult = raw => {
+        if (typeof raw === 'string') return raw.trim() || null;
+        if (raw && typeof raw === 'object' && typeof raw.result === 'string') {
+          return raw.result.trim() || null;
+        }
+        return null;
+      };
+
+      const aResult = unwrapResult(item.com?.llmA?.final?.result);
+      const bResult = unwrapResult(item.com?.llmB?.final?.result);
 
       if (!aResult && !bResult) {
         findingsSection =
