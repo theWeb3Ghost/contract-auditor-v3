@@ -4599,6 +4599,37 @@ async function downloadReport(
         });
     }
 
+    let findingsSection;
+
+    // item.com is only ever written by the COM (two-auditor) pipeline.
+    // Normal-mode items don't have it, so this tells the two apart.
+    if (item.com) {
+
+      const aResult = item.com?.llmA?.final?.result || null;
+      const bResult = item.com?.llmB?.final?.result || null;
+
+      if (!aResult && !bResult) {
+        findingsSection =
+          '# AUDIT FINDINGS\n\nNo completed COM audit results were found for this item.';
+      } else {
+        findingsSection =
+`# AUDIT FINDINGS — AUDITOR A (final, cross-reviewed)
+
+${aResult || '_Auditor A result unavailable._'}
+
+---
+
+# AUDIT FINDINGS — AUDITOR B (final, cross-reviewed)
+
+${bResult || '_Auditor B result unavailable._'}`;
+      }
+
+    } else {
+      findingsSection =
+`# AUDIT FINDINGS
+
+${item.audit || 'No audit content available.'}`;
+    }
 
     const report = `# SMART CONTRACT SECURITY AUDIT REPORT
 
@@ -4616,10 +4647,10 @@ Implementation: ${item.implementation || 'N/A'}
 
 ---
 
-# AUDIT FINDINGS
+${findingsSection}
 
-${item.audit}
-
+---
+    
 ---
 
 ## Disclaimer
