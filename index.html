@@ -715,6 +715,23 @@ Duplicates are automatically removed.
 
 <textarea id="systemPrompt"></textarea>
 
+<label>Audit Mode</label>
+<select id="batchMode">
+  <option value="normal">Normal — existing single LLM</option>
+  <option value="com">COM — dual auditor cross-review</option>
+</select>
+
+<div id="comSettings" style="margin-top:14px;padding:12px;border:1px solid var(--border);border-radius:10px">
+  <h3>🤝 COM Dual-Auditor Settings</h3>
+  <p class="hint">Phase 1 runs both auditors together. After both finish, Phase 2 runs both cross-reviews together. Each result is checkpointed immediately.</p>
+  <label>LLM A Endpoint</label><input id="comLlmAUrl" placeholder="https://.../chat/completions" />
+  <label>LLM A Model</label><input id="comLlmAModel" placeholder="model name" />
+  <label>LLM A API Keys (comma separated)</label><input id="comLlmAKeys" type="password" placeholder="key1,key2" />
+  <label>LLM B Endpoint</label><input id="comLlmBUrl" placeholder="https://.../chat/completions" />
+  <label>LLM B Model</label><input id="comLlmBModel" placeholder="model name" />
+  <label>LLM B API Keys (comma separated)</label><input id="comLlmBKeys" type="password" placeholder="key1,key2" />
+</div>
+
 </div>
 
 
@@ -1192,6 +1209,14 @@ const resumeBtn = $('resumeBtn');
 const updateBatchConfigBtn =
   $('updateBatchConfigBtn');
 
+const batchMode = $('batchMode');
+const comLlmAUrl = $('comLlmAUrl');
+const comLlmAModel = $('comLlmAModel');
+const comLlmAKeys = $('comLlmAKeys');
+const comLlmBUrl = $('comLlmBUrl');
+const comLlmBModel = $('comLlmBModel');
+const comLlmBKeys = $('comLlmBKeys');
+
 const itemsEl = $('items');
 const pagerEl = $('pager');
 let currentPage = 0;
@@ -1235,6 +1260,14 @@ model.value =
 systemPrompt.value =
   localStorage.getItem('auditor_prompt') ||
   DEFAULT_PROMPT;
+
+batchMode.value = localStorage.getItem('auditor_batch_mode') || 'normal';
+comLlmAUrl.value = localStorage.getItem('auditor_com_a_url') || '';
+comLlmAModel.value = localStorage.getItem('auditor_com_a_model') || '';
+comLlmAKeys.value = localStorage.getItem('auditor_com_a_keys') || '';
+comLlmBUrl.value = localStorage.getItem('auditor_com_b_url') || '';
+comLlmBModel.value = localStorage.getItem('auditor_com_b_model') || '';
+comLlmBKeys.value = localStorage.getItem('auditor_com_b_keys') || '';
 
 
 // ============================================================
@@ -2489,6 +2522,18 @@ updateBatchConfigBtn.onclick =
       const newEtherscanKey =
         etherscanKey.value.trim();
 
+      const selectedBatchMode = batchMode.value === 'com' ? 'com' : 'normal';
+      const splitKeys = value => String(value || '').split(',').map(k => k.trim()).filter(Boolean);
+      const comConfig = {
+        enabled: selectedBatchMode === 'com',
+        llmA: { url: comLlmAUrl.value.trim(), model: comLlmAModel.value.trim(), apiKeys: splitKeys(comLlmAKeys.value) },
+        llmB: { url: comLlmBUrl.value.trim(), model: comLlmBModel.value.trim(), apiKeys: splitKeys(comLlmBKeys.value) }
+      };
+
+      if (selectedBatchMode === 'com' && (!comConfig.llmA.url || !comConfig.llmA.model || !comConfig.llmA.apiKeys.length || !comConfig.llmB.url || !comConfig.llmB.model || !comConfig.llmB.apiKeys.length)) {
+        throw new Error('COM mode requires endpoint, model and at least one API key for both LLM A and LLM B.');
+      }
+
 
       if (!newModel) {
 
@@ -2571,7 +2616,11 @@ updateBatchConfigBtn.onclick =
                   newApiKeys,
 
                 etherscanKey:
-                  newEtherscanKey
+                  newEtherscanKey,
+
+                mode: selectedBatchMode,
+
+                com: comConfig
 
               })
 
@@ -2599,6 +2648,14 @@ updateBatchConfigBtn.onclick =
       // --------------------------------------------------------
       // SUCCESS
       // --------------------------------------------------------
+
+      localStorage.setItem('auditor_batch_mode', selectedBatchMode);
+      localStorage.setItem('auditor_com_a_url', comConfig.llmA.url);
+      localStorage.setItem('auditor_com_a_model', comConfig.llmA.model);
+      localStorage.setItem('auditor_com_a_keys', comLlmAKeys.value);
+      localStorage.setItem('auditor_com_b_url', comConfig.llmB.url);
+      localStorage.setItem('auditor_com_b_model', comConfig.llmB.model);
+      localStorage.setItem('auditor_com_b_keys', comLlmBKeys.value);
 
       alert(
         'Batch configuration updated successfully.\n\n' +
