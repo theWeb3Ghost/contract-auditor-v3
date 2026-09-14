@@ -34,7 +34,7 @@ const {
 
 // Maximum source sent to the LLM.
 const MAX_SOURCE_CHARS =
-  150000;
+  1500000;
 
 // ============================================================
 // ADAPTIVE LLM RATE LEARNING
