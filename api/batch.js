@@ -210,54 +210,53 @@ function getConfiguredKeysFrom(config) {
 // Raw API keys are never returned.
 // ============================================================
 
-async function getCurrentConfiguredKeyFingerprints(
-  db
-) {
-
-  const batches =
-    await db
-      .collection(
-        'batches'
-      )
-      .find(
-        {},
-        {
-          projection: {
-            llmApiKeys: 1
-          }
+async function getCurrentConfiguredKeyFingerprints(db) {
+  const batches = await db
+    .collection('batches')
+    .find(
+      {},
+      {
+        projection: {
+          llmApiKeys: 1,
+          mode: 1,
+          com: 1
         }
-      )
-      .toArray();
+      }
+    )
+    .toArray();
 
-  const fingerprints =
-    new Set();
+  const fingerprints = new Set();
 
-  for (
-    const batch
-    of batches
-  ) {
+  for (const batch of batches) {
+    // Normal mode keys
+    const normalKeys = getConfiguredLLMKeys(batch);
 
-    const keys =
-      getConfiguredLLMKeys(
-        batch
+    for (const key of normalKeys) {
+      fingerprints.add(getKeyFingerprint(key));
+    }
+
+    // COM mode: include BOTH auditor key pools
+    if (batch.mode === 'com' && batch.com) {
+      const llmAKeys = getConfiguredKeysFrom(
+        batch.com.llmA
       );
 
-    for (
-      const key
-      of keys
-    ) {
-
-      fingerprints.add(
-        getKeyFingerprint(
-          key
-        )
+      const llmBKeys = getConfiguredKeysFrom(
+        batch.com.llmB
       );
+
+      for (const key of llmAKeys) {
+        fingerprints.add(getKeyFingerprint(key));
+      }
+
+      for (const key of llmBKeys) {
+        fingerprints.add(getKeyFingerprint(key));
+      }
     }
   }
 
   return fingerprints;
 }
-
 
 function getKeyFingerprint(apiKey) {
 
@@ -5163,6 +5162,77 @@ async function getLLMRateStatus(
     // Load all profiles.
     // --------------------------------------------------------
 
+
+
+    // Make sure every configured key has a rate profile.
+// A fresh key must appear in the dashboard even before
+// it has completed its first LLM request.
+
+const configuredBatches =
+  await db
+    .collection('batches')
+    .find({})
+    .project({
+      llmApiKeys: 1,
+      llmUrl: 1,
+      model: 1,
+      mode: 1,
+      com: 1
+    })
+    .sort({
+      createdAt: -1
+    })
+    .toArray();
+
+for (const batch of configuredBatches) {
+
+  if (batch.mode === 'normal') {
+
+    const keys =
+      getConfiguredLLMKeys(batch);
+
+    for (const apiKey of keys) {
+      await getRateProfile({
+        llmUrl: batch.llmUrl,
+        model: batch.model,
+        apiKey
+      });
+    }
+
+  }
+
+  if (batch.mode === 'com' && batch.com) {
+
+    const llmAKeys =
+      getConfiguredKeysFrom(
+        batch.com.llmA
+      );
+
+    const llmBKeys =
+      getConfiguredKeysFrom(
+        batch.com.llmB
+      );
+
+    for (const apiKey of llmAKeys) {
+      await getRateProfile({
+        llmUrl: batch.com.llmA.url,
+        model: batch.com.llmA.model,
+        apiKey
+      });
+    }
+
+    for (const apiKey of llmBKeys) {
+      await getRateProfile({
+        llmUrl: batch.com.llmB.url,
+        model: batch.com.llmB.model,
+        apiKey
+      });
+    }
+  }
+}
+
+
+    
     const allProfiles =
       await collection
         .find({})
