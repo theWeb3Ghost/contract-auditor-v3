@@ -80,7 +80,7 @@ async function runPuterAudit({
       truncated: false
     };
 
-  } catch (error) {
+    } catch (error) {
 
     if (
       error?.code === "EMPTY_RESPONSE"
@@ -88,10 +88,28 @@ async function runPuterAudit({
       throw error;
     }
 
+    console.error("[PUTER] RAW ERROR:", error);
+    console.error("[PUTER] ERROR TYPE:", typeof error);
+    console.error("[PUTER] ERROR NAME:", error?.name);
+    console.error("[PUTER] ERROR MESSAGE:", error?.message);
+    console.error("[PUTER] ERROR STACK:", error?.stack);
+
+    let rawError;
+
+    try {
+      rawError = JSON.stringify(error);
+    } catch {
+      rawError = String(error);
+    }
+
+    console.error("[PUTER] ERROR JSON:", rawError);
+
     const puterError =
       new Error(
         `Puter AI request failed: ${
-          error?.message || error
+          error?.message ||
+          rawError ||
+          String(error)
         }`
       );
 
