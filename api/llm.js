@@ -1,6 +1,7 @@
 // api/llm.js
 
 const { fetch, Agent } = require('undici');
+const { runPuterAudit } = require('./puter');
 
 const MAX_CHARS = 3000000;
 
