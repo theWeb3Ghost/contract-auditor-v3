@@ -315,6 +315,70 @@ async function runLLMAudit({
   }
 
 
+    // ----------------------------------------------------------
+  // PUTER ROUTING
+  //
+  // Special routing configuration:
+  //
+  //   Endpoint = puter
+  //   API Key  = puter
+  //   Model    = actual Puter model
+  //
+  // The model is intentionally NOT required to equal "puter".
+  // This allows any Puter-supported model to be selected.
+  // ----------------------------------------------------------
+
+  const isPuter =
+    typeof llmUrl === 'string' &&
+    llmUrl.trim().toLowerCase() === 'puter' &&
+    typeof apiKey === 'string' &&
+    apiKey.trim().toLowerCase() === 'puter';
+
+  if (isPuter) {
+
+    // Build the same audit source/context that the normal
+    // provider receives.
+    let puterSrc = source;
+
+    let puterTruncated = false;
+
+    if (puterSrc.length > MAX_CHARS) {
+      puterSrc =
+        puterSrc.slice(0, MAX_CHARS);
+
+      puterTruncated = true;
+    }
+
+    const puterUserMessage = `
+You are auditing the following Solidity smart contract.
+
+Contract Name: ${contractName || 'Unknown'}
+Contract Address: ${address || 'Unknown'}
+
+SOURCE CODE:
+\`\`\`solidity
+${puterSrc}
+\`\`\`
+${
+  puterTruncated
+    ? '\nWARNING: Source was truncated because it exceeded the configured source limit.\n'
+    : ''
+}
+${
+  additionalContext
+    ? `\nADDITIONAL AUDIT CONTEXT:\n${String(additionalContext)}\n`
+    : ''
+}
+`;
+
+    return await runPuterAudit({
+      systemPrompt,
+      userMessage: puterUserMessage,
+      model
+    });
+  }
+
+
   // ----------------------------------------------------------
   // VALIDATE API KEY
   // ----------------------------------------------------------
