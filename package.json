@@ -15,6 +15,7 @@
   "dependencies": {
     "express": "^4.21.2",
     "mongodb": "^6.15.0",
-    "undici": "^6.21.1"
+    "undici": "^6.21.1",
+    "@heyputer/puter.js": "2.6.3"
   }
 }
