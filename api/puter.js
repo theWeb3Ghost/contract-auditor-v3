@@ -1,128 +1,147 @@
 // api/puter.js
+const { fetch, Agent } = require('undici');
 
-const { init } = require("@heyputer/puter.js/src/init.cjs");
+const PUTER_TIMEOUT = 30 * 60 * 1000;
+const PUTER_ENDPOINT = 'https://api.puter.com/drivers/call';
 
-async function runPuterAudit({
-  systemPrompt,
-  userMessage,
-  model
-}) {
+const puterDispatcher = new Agent({
+  headersTimeout: PUTER_TIMEOUT,
+  bodyTimeout: PUTER_TIMEOUT,
+  connect: { timeout: 50000 }
+});
+
+function contentToText(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content.map(p => (typeof p === 'string' ? p : p?.text || '')).join('');
+  }
+  return content == null ? '' : String(content);
+}
+
+async function runPuterAudit({ systemPrompt, userMessage, model }) {
   const authToken = process.env.PUTER_AUTH_TOKEN;
 
   if (!authToken) {
-    const error = new Error(
-      "PUTER_AUTH_TOKEN is missing from the server environment"
-    );
-
-    error.code = "PUTER_AUTH_MISSING";
-
+    const error = new Error('PUTER_AUTH_TOKEN is missing from the server environment');
+    error.code = 'PUTER_AUTH_MISSING';
     throw error;
   }
 
-  if (!model || typeof model !== "string" || !model.trim()) {
-    const error = new Error(
-      "Puter model is required"
-    );
-
-    error.code = "PUTER_MODEL_MISSING";
-
+  if (!model || typeof model !== 'string' || !model.trim()) {
+    const error = new Error('Puter model is required');
+    error.code = 'PUTER_MODEL_MISSING';
     throw error;
   }
 
-  const puter = init(authToken);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), PUTER_TIMEOUT);
 
-  console.log(
-    `[PUTER] Sending audit request using model: ${model}`
-  );
+  let response;
 
   try {
-    const response = await puter.ai.chat(
-      [
-        {
-          role: "system",
-          content: systemPrompt || ""
-        },
-        {
-          role: "user",
-          content: userMessage
+    console.log(`[PUTER] Sending audit request using model: ${model}`);
+
+    response = await fetch(PUTER_ENDPOINT, {
+      method: 'POST',
+      dispatcher: puterDispatcher,
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${authToken}`
+      },
+      body: JSON.stringify({
+        interface: 'puter-chat-completion',
+        driver: 'ai-chat',
+        test_mode: false,
+        method: 'complete',
+        args: {
+          model: model.trim(),
+          messages: [
+            { role: 'system', content: systemPrompt || '' },
+            { role: 'user', content: userMessage }
+          ]
         }
-      ],
-      {
-        model: model.trim(),
-        normalize: true
-      }
-    );
-
-    const result =
-      response?.message?.content ??
-      response?.text ??
-      "";
-
-    if (
-      !result ||
-      !String(result).trim()
-    ) {
-      const error = new Error(
-        "Puter returned an empty audit response"
+      })
+    });
+  } catch (error) {
+    if (error?.name === 'AbortError' || error?.name === 'TimeoutError') {
+      const timeoutError = new Error(
+        `Puter request timed out after ${PUTER_TIMEOUT / 60000} minutes`
       );
-
-      error.code = "EMPTY_RESPONSE";
-
-      throw error;
+      timeoutError.code = 'LLM_TIMEOUT';
+      throw timeoutError;
     }
 
-    console.log(
-      `[PUTER] Audit response received using model: ${model}`
+    const networkError = new Error(
+      `Puter network request failed: ${error?.message || error}`
     );
-
-    return {
-      result: String(result).trim(),
-      truncated: false
-    };
-
-    } catch (error) {
-
-    if (
-      error?.code === "EMPTY_RESPONSE"
-    ) {
-      throw error;
-    }
-
-    console.error("[PUTER] RAW ERROR:", error);
-    console.error("[PUTER] ERROR TYPE:", typeof error);
-    console.error("[PUTER] ERROR NAME:", error?.name);
-    console.error("[PUTER] ERROR MESSAGE:", error?.message);
-    console.error("[PUTER] ERROR STACK:", error?.stack);
-
-    let rawError;
-
-    try {
-      rawError = JSON.stringify(error);
-    } catch {
-      rawError = String(error);
-    }
-
-    console.error("[PUTER] ERROR JSON:", rawError);
-
-    const puterError =
-      new Error(
-        `Puter AI request failed: ${
-          error?.message ||
-          rawError ||
-          String(error)
-        }`
-      );
-
-    puterError.code =
-      "PUTER_ERROR";
-
-    puterError.originalError =
-      error;
-
-    throw puterError;
+    networkError.code = 'NETWORK_ERROR';
+    networkError.originalError = error;
+    throw networkError;
+  } finally {
+    clearTimeout(timeoutId);
   }
+
+  const rawText = await response.text();
+
+  console.log(`[PUTER] HTTP ${response.status}`);
+
+  if (!response.ok) {
+    const error = new Error(
+      `Puter returned HTTP ${response.status}: ${rawText.slice(0, 1000)}`
+    );
+    error.code = response.status === 429 ? 'RATE_LIMIT' : 'PUTER_ERROR';
+    error.httpStatus = response.status;
+    error.responseText = rawText;
+    throw error;
+  }
+
+  let json;
+
+  try {
+    json = JSON.parse(rawText);
+  } catch {
+    const error = new Error(`Puter returned invalid JSON: ${rawText.slice(0, 1000)}`);
+    error.code = 'INVALID_RESPONSE';
+    error.responseText = rawText;
+    throw error;
+  }
+
+  // Structured provider error (works for both {"error": "..."} and {"error": {...}})
+  if (json?.error || json?.success === false) {
+    const detail =
+      typeof json.error === 'string'
+        ? json.error
+        : json.error?.message || JSON.stringify(json.error || json);
+
+    const error = new Error(`Puter API error: ${detail}`);
+    error.code = 'PUTER_ERROR';
+    error.apiError = json.error || json;
+    throw error;
+  }
+
+  const result =
+    json?.result?.message?.content ??
+    json?.message?.content ??
+    json?.result?.text ??
+    json?.text ??
+    '';
+
+  const text = contentToText(result);
+
+  if (!text.trim()) {
+    const error = new Error('Puter returned an empty audit response');
+    error.code = 'EMPTY_RESPONSE';
+    error.responseText = rawText;
+    throw error;
+  }
+
+  console.log(`[PUTER] Audit response received using model: ${model}`);
+
+  return {
+    result: text.trim(),
+    truncated: false
+  };
 }
 
-module.exports = {
-  runPuterAudit
-};
+module.exports = { runPuterAudit };
